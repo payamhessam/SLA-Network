@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react'; import{createRoot}from'react-dom/client'; import{AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,LockKeyhole,LogOut,MemoryStick,Moon,Plus,Radio,Router,ShieldCheck,Sun,Terminal,Trash2}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css';
+import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,LockKeyhole,LogOut,MemoryStick,Moon,Plus,Radio,Router,ShieldCheck,Sun,Terminal,Trash2}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css';
 type Device={id:number;hostname:string;management_ip?:string;site:string;role:string;criticality:string;device_type:string;model?:string;active:boolean;match_status:string};
 const getToken=()=>localStorage.getItem('token')||sessionStorage.getItem('token');
 const clearToken=()=>{localStorage.removeItem('token');sessionStorage.removeItem('token')};
@@ -15,6 +15,14 @@ function nodeGlyph(kind:string,cx:number,cy:number,color:string,scale=1){
   if(kind==='sw')return <g transform={`translate(${cx} ${cy})`} stroke={color} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x={-s(11)} y={-s(7)} width={s(22)} height={s(14)} rx={s(2)}/><line x1={-s(11)} y1={0} x2={s(11)} y2={0}/><circle cx={-s(6)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/><circle cx={-s(2)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/><circle cx={s(2)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/></g>;
   return <g transform={`translate(${cx} ${cy})`} stroke={color} strokeWidth={1.6} fill="none" strokeLinecap="round"><rect x={-s(8)} y={-s(8)} width={s(16)} height={s(16)} rx={s(2)}/><line x1={-s(8)} y1={-s(2)} x2={s(8)} y2={-s(2)}/></g>;
 }
+const TOPO_DARK={canvas:'#0b0f10',grid:'rgba(255,255,255,.045)',node:'#181c1e',chip:'#0b0f10',chipStroke:'#313537',nameFill:'#1c2022',nameStroke:'#424751',text:'#e0e3e5',dim:'#8fb0c8',lldp:'#75d2fb',cdp:'#a8caef',dual:'#ffb4ab',centerFill:'#1c2022',centerStroke:'#a6c8ff',labelBg:'#00539b',labelStroke:'#a6c8ff',labelText:'#d4e3ff'};
+const TOPO_LIGHT={canvas:'#eef2f6',grid:'rgba(0,45,90,.07)',node:'#ffffff',chip:'#ffffff',chipStroke:'#c2c7ce',nameFill:'#ffffff',nameStroke:'#c2c7ce',text:'#191c1e',dim:'#3f5b6d',lldp:'#00658f',cdp:'#345575',dual:'#ba1a1a',centerFill:'#d4e3ff',centerStroke:'#00539b',labelBg:'#00539b',labelStroke:'#00539b',labelText:'#ffffff'};
+function useTheme(){
+  const get=()=>typeof document!=='undefined'&&document.documentElement.dataset.theme==='light'?'light':'dark';
+  const[t,setT]=useState(get);
+  useEffect(()=>{const o=new MutationObserver(()=>setT(get()));o.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});return()=>o.disconnect()},[]);
+  return t;
+}
 function abbrevPort(p:string|null){
   if(!p)return p;
   const map:[string,string][]=[['TwentyFiveGigE','Twe'],['TenGigabitEthernet','Te'],['FortyGigabitEthernet','Fo'],['HundredGigE','Hu'],['GigabitEthernet','Gi'],['FastEthernet','Fa'],['Ethernet','Eth'],['Port-channel','Po'],['Management','Mgmt'],['Loopback','Lo']];
@@ -22,33 +30,59 @@ function abbrevPort(p:string|null){
   return p;
 }
 function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
+  const theme=useTheme();const P=theme==='light'?TOPO_LIGHT:TOPO_DARK;
   const parse=(r:any)=>{const li=String(r['Local Interface']||'');const m=li.match(/ on (\S+)(?: via (\S+))?/i);return{name:String(r['Neighbor']||li||'Unknown'),protocol:String(r['Protocol']||'').toUpperCase(),local:m?m[1]:null,remote:m&&m[2]?m[2]:null}};
   const nb=rows.map(parse);
-  const prefix=(()=>{const parts=device.hostname.split('-');return parts.length>=3?parts.slice(0,2).join('-')+'-':''})();
-  const short=(name:string)=>prefix&&name.toLowerCase().startsWith(prefix.toLowerCase())?name.slice(prefix.length):name;
+  const groups=new Map<string,{name:string,links:any[]}>();
+  nb.forEach(n=>{const k=n.name.toLowerCase();const g=groups.get(k)||{name:n.name,links:[]};g.links.push(n);groups.set(k,g)});
+  const nodes=[...groups.values()];
+  const anyDual=nodes.some(g=>g.links.length>1);
   const kind=(name:string)=>/wap|(?:^|[-_])ap(?:[-_]|$)/i.test(name)?'ap':/dsw|asw|sw|switch|rtr|router/i.test(name)?'sw':'dev';
-  const color=(p:string)=>p==='CDP'?'#a8caef':'#75d2fb';
-  const N=nb.length;
-  const R=Math.max(160,Math.min(150+N*12,360));
-  const pad=160,vb=2*(R+pad);
+  const nodeColor=(g:{links:any[]})=>g.links.length>1?P.dual:(g.links[0].protocol==='CDP'?P.cdp:P.lldp);
+  const linkColor=(g:{links:any[]},lk:any)=>g.links.length>1?P.dual:(lk.protocol==='CDP'?P.cdp:P.lldp);
+  const N=nodes.length;
+  const R=Math.max(170,Math.min(150+N*13,380));
   const nodeR=22,centerR=32;
+  const labelW=(s:string)=>s.length*6.6+14;
+  const maxLW=Math.max(80,labelW(device.hostname),...nodes.map(g=>labelW(g.name)));
+  const pad=Math.min(300,Math.round(70+maxLW));
+  const vb=2*(R+pad);
   const pos=(i:number)=>{const a=(-90+i*360/Math.max(1,N))*Math.PI/180;return{a,x:R*Math.cos(a),y:R*Math.sin(a)}};
   const F='\'JetBrains Mono\',ui-monospace,monospace';
-  return <div className="dv-topo">
+  const svgRef=useRef<SVGSVGElement>(null);
+  const[box,setBox]=useState({x:-(R+pad),y:-(R+pad),w:vb,h:vb});
+  const boxRef=useRef(box);boxRef.current=box;
+  const drag=useRef<{sx:number,sy:number,ox:number,oy:number}|null>(null);
+  useEffect(()=>{setBox({x:-(R+pad),y:-(R+pad),w:vb,h:vb})},[device.hostname,rows.length,vb]);
+  const toUser=(cx:number,cy:number)=>{const svg=svgRef.current!;const r=svg.getBoundingClientRect();const b=boxRef.current;const s=Math.min(r.width/b.w,r.height/b.h)||1;const ox=(r.width-b.w*s)/2,oy=(r.height-b.h*s)/2;return{ux:b.x+(cx-r.left-ox)/s,uy:b.y+(cy-r.top-oy)/s}};
+  useEffect(()=>{const svg=svgRef.current;if(!svg)return;const onWheel=(e:WheelEvent)=>{e.preventDefault();const b=boxRef.current;const{ux,uy}=toUser(e.clientX,e.clientY);const f=e.deltaY<0?0.85:1/0.85;const w=Math.min(Math.max(b.w*f,vb/10),vb*3);setBox({x:ux-(ux-b.x)*(w/b.w),y:uy-(uy-b.y)*(w/b.w),w,h:w})};svg.addEventListener('wheel',onWheel,{passive:false});return()=>svg.removeEventListener('wheel',onWheel)},[vb]);
+  const zoomAt=(f:number)=>setBox(b=>{const cx=b.x+b.w/2,cy=b.y+b.h/2;const w=Math.min(Math.max(b.w*f,vb/10),vb*3);return{x:cx-(cx-b.x)*(w/b.w),y:cy-(cy-b.y)*(w/b.w),w,h:w}});
+  const reset=()=>setBox({x:-(R+pad),y:-(R+pad),w:vb,h:vb});
+  const onDown=(e:React.MouseEvent)=>{drag.current={sx:e.clientX,sy:e.clientY,ox:boxRef.current.x,oy:boxRef.current.y}};
+  const onMove=(e:React.MouseEvent)=>{if(!drag.current)return;const svg=svgRef.current!;const r=svg.getBoundingClientRect();const b=boxRef.current;const s=Math.min(r.width/b.w,r.height/b.h)||1;setBox({x:drag.current.ox-(e.clientX-drag.current.sx)/s,y:drag.current.oy-(e.clientY-drag.current.sy)/s,w:b.w,h:b.h})};
+  const onUp=()=>{drag.current=null};
+  const total=nb.length;
+  return <div className="dv-topo" style={{background:P.canvas,backgroundImage:`linear-gradient(${P.grid} 1px,transparent 1px),linear-gradient(90deg,${P.grid} 1px,transparent 1px)`,backgroundSize:'24px 24px'}}>
     <div className="dv-topo-legend">
       <div className="dv-topo-title">{device.hostname}</div>
-      <div className="dv-topo-sub">{N} CDP/LLDP neighbor{N===1?'':'s'}{prefix?` · ${prefix}…`:''}</div>
-      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:'#75d2fb'}}/> LLDP</div>
-      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:'#a8caef'}}/> CDP</div>
+      <div className="dv-topo-sub">{total} link{total===1?'':'s'} · {N} device{N===1?'':'s'}</div>
+      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:P.lldp}}/> LLDP</div>
+      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:P.cdp}}/> CDP</div>
+      {anyDual&&<div className="dv-legend-row"><span className="dv-legend-dot" style={{background:P.dual}}/> Redundant link</div>}
     </div>
-    <svg className="dv-topo-svg" viewBox={`${-(R+pad)} ${-(R+pad)} ${vb} ${vb}`} role="img" aria-label={`CDP and LLDP neighbor topology for ${device.hostname}`}>
-      {nb.map((n,i)=>{const{x,y}=pos(i);return <line key={'l'+i} x1={0} y1={0} x2={x} y2={y} stroke={color(n.protocol)} strokeWidth={2} strokeOpacity={0.5} strokeDasharray={n.protocol==='CDP'?'6 5':undefined}/>})}
-      {nb.map((n,i)=>{if(!n.local&&!n.remote)return null;const{x,y}=pos(i);const lx=x*0.55,ly=y*0.55;const lp=abbrevPort(n.local),rp=abbrevPort(n.remote);const two=!!(lp&&rp);const w=Math.max((lp||'').length,rp?rp.length+2:0)*6.2+12;return <g key={'p'+i}><title>{`local ${n.local||'—'}  ·  remote ${n.remote||'—'}`}</title><rect x={lx-w/2} y={ly-(two?14:8)} width={w} height={two?28:16} rx={3} fill="#0b0f10" stroke="#313537"/>{lp&&<text x={lx} y={ly+(two?-2:3)} textAnchor="middle" fontFamily={F} fontSize={9} fill="#e0e3e5">{lp}</text>}{rp&&<text x={lx} y={ly+(two?11:3)} textAnchor="middle" fontFamily={F} fontSize={9} fill="#8fb0c8">{'→ '+rp}</text>}</g>})}
-      {nb.map((n,i)=>{const{a,x,y}=pos(i);const lbl=short(n.name)||n.name;const lr=R+nodeR+16;const lx=lr*Math.cos(a),ly=lr*Math.sin(a);const w=lbl.length*6.6+12;return <g key={'n'+i}><circle cx={x} cy={y} r={nodeR} fill="#181c1e" stroke={color(n.protocol)} strokeWidth={2}/>{nodeGlyph(kind(n.name),x,y,color(n.protocol))}<title>{`${n.name}${n.remote?` · remote ${n.remote}`:''}${n.local?` · local ${n.local}`:''} · ${n.protocol}`}</title><rect x={lx-w/2} y={ly-9} width={w} height={18} rx={4} fill="#1c2022" stroke="#424751"/><text x={lx} y={ly+4} textAnchor="middle" fontFamily={F} fontSize={10} fill="#e0e3e5">{lbl}</text></g>})}
-      <circle cx={0} cy={0} r={centerR} fill="#1c2022" stroke="#a6c8ff" strokeWidth={2.5}/>
-      {nodeGlyph('sw',0,0,'#a6c8ff',1.25)}
-      <rect x={-(device.hostname.length*6.6+14)/2} y={centerR+6} width={device.hostname.length*6.6+14} height={20} rx={4} fill="#00539b" stroke="#a6c8ff"/>
-      <text x={0} y={centerR+20} textAnchor="middle" fontFamily={F} fontSize={11} fontWeight={600} fill="#d4e3ff">{device.hostname}</text>
+    <div className="dv-topo-zoom">
+      <button onClick={()=>zoomAt(0.8)} aria-label="Zoom in" title="Zoom in">+</button>
+      <button onClick={()=>zoomAt(1.25)} aria-label="Zoom out" title="Zoom out">−</button>
+      <button onClick={reset} aria-label="Reset view" title="Reset view">⤢</button>
+    </div>
+    <svg ref={svgRef} className="dv-topo-svg" viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} style={{cursor:'grab'}} role="img" aria-label={`CDP and LLDP neighbor topology for ${device.hostname}`}>
+      {nodes.map((g,i)=>{const{x,y}=pos(i);const dist=Math.hypot(x,y)||1;const px=-y/dist,py=x/dist;const L=g.links.length;return <g key={'e'+i}>{g.links.map((lk,j)=>{const off=L>1?(j-(L-1)/2)*18:0;const cxp=x/2+px*off*2.2,cyp=y/2+py*off*2.2;return <path key={j} d={`M0 0 Q ${cxp.toFixed(1)} ${cyp.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}`} fill="none" stroke={linkColor(g,lk)} strokeWidth={L>1?2.4:2} strokeOpacity={0.65} strokeDasharray={lk.protocol==='CDP'?'6 5':undefined}/>})}</g>})}
+      {nodes.map((g,i)=>{const{x,y}=pos(i);const lines:[string,string][]=[];g.links.forEach(lk=>{const lp=abbrevPort(lk.local),rp=abbrevPort(lk.remote);if(lp)lines.push([lp,P.text]);if(rp)lines.push(['→ '+rp,P.dim])});if(!lines.length)return null;const cw=Math.max(...lines.map(l=>l[0].length))*6.2+12,ch=lines.length*11+7;const cx=x*0.52,cy=y*0.52;return <g key={'p'+i}><rect x={cx-cw/2} y={cy-ch/2} width={cw} height={ch} rx={3} fill={P.chip} stroke={g.links.length>1?P.dual:P.chipStroke}/>{lines.map((l,li)=><text key={li} x={cx} y={cy-ch/2+12+li*11} textAnchor="middle" fontFamily={F} fontSize={9} fill={l[1]}>{l[0]}</text>)}</g>})}
+      {nodes.map((g,i)=>{const{a,x,y}=pos(i);const c=nodeColor(g);const cosA=Math.cos(a);const anchor:'start'|'end'|'middle'=cosA>0.25?'start':cosA<-0.25?'end':'middle';const lr=R+nodeR+10;const lx=lr*cosA,ly=lr*Math.sin(a);const w=labelW(g.name);const rx=anchor==='start'?lx-6:anchor==='end'?lx-w+6:lx-w/2;return <g key={'n'+i}><circle cx={x} cy={y} r={nodeR} fill={P.node} stroke={c} strokeWidth={g.links.length>1?2.7:2}/>{nodeGlyph(kind(g.name),x,y,c)}<title>{`${g.name} · ${g.links.length} link${g.links.length===1?'':'s'}`+g.links.map(lk=>`\n  ${lk.local||'?'} → ${lk.remote||'?'} (${lk.protocol})`).join('')}</title><rect x={rx} y={ly-9} width={w} height={18} rx={4} fill={P.nameFill} stroke={g.links.length>1?P.dual:P.nameStroke}/><text x={lx} y={ly+4} textAnchor={anchor} fontFamily={F} fontSize={10} fill={P.text}>{g.name}</text></g>})}
+      <circle cx={0} cy={0} r={centerR} fill={P.centerFill} stroke={P.centerStroke} strokeWidth={2.5}/>
+      {nodeGlyph('sw',0,0,P.centerStroke,1.25)}
+      <rect x={-labelW(device.hostname)/2} y={centerR+6} width={labelW(device.hostname)} height={20} rx={4} fill={P.labelBg} stroke={P.labelStroke}/>
+      <text x={0} y={centerR+20} textAnchor="middle" fontFamily={F} fontSize={11} fontWeight={600} fill={P.labelText}>{device.hostname}</text>
     </svg>
   </div>;
 }
