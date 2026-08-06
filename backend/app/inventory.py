@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .auth import administrator, current_user
-from .db import AuditEvent, ImportJob, InventoryDevice, InventoryDeviceType, Site, Zone, session
+from .db import AuditEvent, Device, ImportJob, InventoryDevice, InventoryDeviceType, Site, Zone, session
 from .logicmonitor import LogicMonitorClient
 
 router = APIRouter(prefix="/api/v1")
@@ -257,7 +257,12 @@ async def lm_lookup(body:NamePreview,user=Depends(current_user),db:Session=Depen
         results=[]
         for item in exact:
             props=await client.properties(int(item["id"]));model_text=props.get("auto.endpoint.model","");model_match=re.search(r"\bC\d{4}(?:-[A-Z0-9]+)+\b",model_text,re.I)
-            results.append({"logicmonitor_device_id":item.get("id"),"display_name":item.get("displayName"),"hostname":item.get("name"),"management_ip":item.get("name") if re.fullmatch(r"[0-9a-fA-F:.]+",str(item.get("name",""))) else props.get("system.ips"),"model":model_match.group(0).upper() if model_match else props.get("auto.endpoint.model"),"manufacturer":props.get("system.manufacturer") or "Cisco","os_version":props.get("system.version"),"groups":item.get("hostGroupIds",[]),"status":item.get("hostStatus"),"last_data_timestamp":item.get("lastDataTime")})
+            legacy=db.scalar(select(Device).where(Device.lm_device_id==int(item["id"])))
+            raw_model=(legacy.model if legacy and legacy.model else None) or (model_match.group(0).upper() if model_match else (props.get("system.model") or props.get("auto.endpoint.model")))
+            model=(str(raw_model)[:100] if raw_model else None)
+            raw_groups=item.get("hostGroupIds",[])
+            groups=[x.strip() for x in raw_groups.split(",") if x.strip()] if isinstance(raw_groups,str) else (raw_groups or [])
+            results.append({"logicmonitor_device_id":item.get("id"),"display_name":item.get("displayName"),"hostname":item.get("name"),"management_ip":item.get("name") if re.fullmatch(r"[0-9a-fA-F:.]+",str(item.get("name",""))) else props.get("system.ips"),"model":model,"manufacturer":props.get("system.manufacturer") or "Cisco","os_version":props.get("system.version"),"groups":groups,"status":item.get("hostStatus"),"last_data_timestamp":item.get("lastDataTime")})
         return {"status":"Matched" if len(results)==1 else "Ambiguous","generated_name":name,"match_confidence":"Exact" if len(results)==1 else None,"candidates":results}
     except Exception as exc:
         return JSONResponse(status_code=502,content={"detail":"LogicMonitor lookup failed","category":type(exc).__name__})
