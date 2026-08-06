@@ -65,7 +65,12 @@ def list_access_points(q:str="",site:str="",city:str="",province:str="",status:s
 async def validate_import(file:UploadFile=File(...),user=Depends(administrator),db:Session=Depends(session)):
     started=time.monotonic();content=await file.read()
     if not file.filename or not file.filename.lower().endswith(".xlsx"): raise HTTPException(415,"Only .xlsx access-point exports are supported")
-    try: ws=load_workbook(io.BytesIO(content),read_only=True,data_only=True).active
+    try:
+        ws=load_workbook(io.BytesIO(content),read_only=True,data_only=True).active
+        # Some controller exports incorrectly declare <dimension ref="A1"> even
+        # though the worksheet contains many columns. Streaming mode trusts that
+        # metadata unless dimensions are reset and would otherwise read only A1.
+        ws.reset_dimensions()
     except Exception: raise HTTPException(422,"The uploaded workbook is not a valid Excel file")
     headers=[str(x or "").strip() for x in next(ws.iter_rows(values_only=True))];missing=[x for x in REQUIRED if x not in headers]
     if missing: raise HTTPException(422,"Missing required columns: "+", ".join(missing))

@@ -1,4 +1,5 @@
 import os
+import zipfile
 from io import BytesIO
 from openpyxl import Workbook
 
@@ -57,7 +58,14 @@ def test_access_point_import_validation_and_replace():
         h=auth(client);wb=Workbook();ws=wb.active
         ws.append(["AP Name","AP Model","IP Address","AP Radio MAC","Ethernet MAC","Serial Number","Site Tag","Ignored Column"])
         ws.append(["cad03-z01-wap-001","C9130AXI","10.7.222.50","0011.2233.4455","0066.7788.99aa","SERIAL001","CAD03","ignored"])
-        content=BytesIO();wb.save(content);content.seek(0)
+        normal=BytesIO();wb.save(normal);normal.seek(0)
+        content=BytesIO()
+        with zipfile.ZipFile(normal) as source, zipfile.ZipFile(content,"w") as target:
+            for name in source.namelist():
+                value=source.read(name)
+                if name=="xl/worksheets/sheet1.xml": value=value.replace(b'<dimension ref="A1:H2"',b'<dimension ref="A1"')
+                target.writestr(name,value)
+        content.seek(0)
         validation=client.post("/api/v1/access-points/import/validate",headers=h,files={"file":("aps.xlsx",content,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
         assert validation.status_code==200 and validation.json()["summary"]=={"total":1,"ready":1,"warnings":0,"errors":0,"review":0}
         result=client.post(f"/api/v1/access-points/import/{validation.json()['job_id']}/commit?mode=replace",headers=h)
