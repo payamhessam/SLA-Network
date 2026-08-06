@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react'; import{createRoot}from'react-dom/client'; import{AlertTriangle,ArrowRight,Eye,EyeOff,FileDown,LockKeyhole,LogOut,Moon,Plus,Radio,ShieldCheck,Sun,Trash2}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css';
+import React,{useEffect,useState} from 'react'; import{createRoot}from'react-dom/client'; import{AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,LockKeyhole,LogOut,MemoryStick,Moon,Plus,Radio,Router,ShieldCheck,Sun,Terminal,Trash2}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css';
 type Device={id:number;hostname:string;management_ip?:string;site:string;role:string;criticality:string;device_type:string;model?:string;active:boolean;match_status:string};
 const getToken=()=>localStorage.getItem('token')||sessionStorage.getItem('token');
 const clearToken=()=>{localStorage.removeItem('token');sessionStorage.removeItem('token')};
@@ -9,7 +9,68 @@ function Login({done}:{done:()=>void}){const[account,setAccount]=useState<'user'
 function App(){const[ready,setReady]=useState(!!getToken());const[role,setRole]=useState('');const[page,setPage]=useState('Overview');const[selected,setSelected]=useState<Device|null>(null);const[devices,setDevices]=useState<Device[]>([]);const[error,setError]=useState('');const[dark,setDark]=useState(()=>localStorage.getItem('theme')!=='light'&&(localStorage.getItem('theme')==='dark'||matchMedia('(prefers-color-scheme: dark)').matches));const load=()=>api('/devices').then(setDevices).catch(x=>setError(x.message));useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('theme',dark?'dark':'light')},[dark]);useEffect(()=>{if(ready){api('/auth/me').then(x=>setRole(x.role));load()}},[ready]);if(!ready)return <Login done={()=>setReady(true)}/>;const navigate=(x:string)=>{setSelected(null);setPage(x)};const menu=['Overview','Device Fleet','Access Points',...(role==='Administrator'?['Settings']:[])];return <div className="shell"><aside><div className="brand">MEDLINE <span>CANADA</span></div>{menu.map(x=><button className={page===x&&!selected?'active':''} onClick={()=>navigate(x)}>{x}</button>)}<button className="logout" onClick={()=>{clearToken();setReady(false)}}><LogOut size={16}/> Sign out</button></aside><main><header><div><span className="eyebrow">MEDLINE CANADA · ENTERPRISE NETWORK</span><h1>{selected?selected.hostname:page}</h1></div><div className="header-actions"><button className="app-theme-toggle" onClick={()=>setDark(!dark)} aria-label={`Use ${dark?'light':'dark'} mode`}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><span className="secure"><ShieldCheck size={16}/> {role||'Authenticated'}</span></div></header>{error&&<div className="banner">{error}</div>}{selected?<DeviceDetail device={selected} back={()=>setSelected(null)}/>:<>{page==='Overview'&&<Overview devices={devices}/>} {page==='Device Fleet'&&<InventoryFleet token={getToken()||''} open={setSelected}/>} {page==='Access Points'&&<AccessPoints token={getToken()||''} administrator={role==='Administrator'}/>} {page==='Settings'&&role==='Administrator'&&<SettingsPage reload={load}/>}</>}</main></div>}
 function Overview({devices}:{devices:Device[]}){const cards=[['Enterprise SLA','N/A','Baseline pending'],['Active devices',devices.filter(x=>x.active).length,'Local inventory'],['Access points',devices.filter(x=>x.device_type==='access_point').length,'Cisco 9120 / 9130'],['Monitoring gaps',devices.filter(x=>x.match_status!=='Matched').length,'Requires mapping']];return <><section className="cards">{cards.map(c=><article><span>{c[0]}</span><strong>{c[1]}</strong><small>{c[2]}</small></article>)}</section><section className="panel"><h2>Operational posture</h2><div className="empty"><Radio/><h3>Collection baseline pending</h3><p>Add devices in Settings, configure runtime LogicMonitor secrets, then run collection. Missing evidence is never converted to zero.</p></div></section></>}
 function Fleet({devices,reload,open}:{devices:Device[],reload:()=>void,open:(d:Device)=>void}){return <section className="panel"><div className="panelhead"><h2>Managed inventory</h2><button onClick={async()=>{await api('/reports/generate',{method:'POST'});alert('Report generated')}}><FileDown size={16}/> Generate report</button></div><table><thead><tr><th>Device</th><th>Site</th><th>Role</th><th>Model</th><th>Type</th><th>Mapping</th><th></th></tr></thead><tbody>{devices.map(d=><tr className="clickrow" onClick={()=>open(d)}><td><b className="device-link">{d.hostname}</b><small>{d.management_ip||'No IP'}</small></td><td>{d.site}</td><td>{d.role}</td><td>{d.model||'Not available'}</td><td><span className="pill">{d.device_type.replace('_',' ')}</span></td><td>{d.match_status}</td><td><button className="icon" aria-label="Delete" onClick={async e=>{e.stopPropagation();if(confirm(`Remove ${d.hostname} from local inventory?`)){await api('/devices/'+d.id,{method:'DELETE'});reload()}}}><Trash2 size={16}/></button></td></tr>)}</tbody></table>{!devices.length&&<div className="empty">No devices configured.</div>}</section>}
-function DeviceDetail({device,back}:{device:Device,back:()=>void}){const[data,setData]=useState<any>(null);const[tab,setTab]=useState('Health Data');useEffect(()=>{api(`/devices/${device.id}/detail`).then(setData)},[device.id]);if(!data)return <section className="panel">Loading device details…</section>;const table=data.tables.find((x:any)=>x.name===tab);return <><button className="back" onClick={back}>← Device Fleet</button><section className="device-hero"><div><span>{device.site} · {device.role}</span><h2>{device.hostname}</h2><small>{device.management_ip||'No management IP'} · {device.model||'Model pending'}</small></div><div><span>Monitoring state</span><strong>{device.match_status}</strong></div></section><nav className="tabs">{data.tables.map((x:any)=><button className={tab===x.name?'active':''} onClick={()=>setTab(x.name)}>{x.name}</button>)}</nav><section className="panel detail"><div className="panelhead"><div><h2>{table.name}</h2><p className="muted">Source: {data.source}</p></div><span className={'evidence '+(table.rows.length?'available':'missing')}>{table.evidence_status}</span></div>{table.rows.length?<table><thead><tr>{table.columns.map((c:string)=><th>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any)=><tr>{table.columns.map((c:string)=><td>{row[c]??'Not available from LogicMonitor'}</td>)}</tr>)}</tbody></table>:<div className="empty"><AlertTriangle/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized. Missing evidence is not displayed as zero.</p><div className="column-list">{table.columns.map((c:string)=><span>{c}</span>)}</div></div>}</section></>}
+function DeviceDetail({device,back}:{device:Device,back:()=>void}){
+  const[data,setData]=useState<any>(null);
+  const[tab,setTab]=useState('Health Data');
+  useEffect(()=>{api(`/devices/${device.id}/detail`).then(setData)},[device.id]);
+  if(!data)return <div className="detail-view"><div className="dv-panel dv-loading">Loading device details…</div></div>;
+  const table=data.tables.find((x:any)=>x.name===tab)||data.tables[0];
+  const rowsOf=(name:string)=>(data.tables.find((x:any)=>x.name===name)?.rows||[]);
+  const health=rowsOf('Health Data')[0]||{};
+  const ping=rowsOf('Ping Quality')[0]||{};
+  const num=(v:any)=>typeof v==='number'&&isFinite(v)?v:(typeof v==='string'&&v.trim()!==''&&!isNaN(Number(v))?Number(v):null);
+  const missingText=(v:any)=>typeof v==='string'&&/not available|not monitored|not collected|baseline pending|insufficient/i.test(v);
+  const fmtPct=(v:any)=>{const n=num(v);return n==null?'N/A':`${Math.round(n)}%`};
+  const fmtUptime=(v:any)=>{const n=num(v);return n==null?'N/A':`${n.toLocaleString()}s`};
+  const clean=(v:any)=>v&&!missingText(v)?String(v):'N/A';
+  const availability=(()=>{const n=num(ping['24h Availability']);return n==null?null:Math.max(0,Math.min(100,Math.round(n)))})();
+  const metrics=[
+    {icon:<Cpu size={14}/>,label:'CPU 1m',value:fmtPct(health['CPU 1m %']),mono:false},
+    {icon:<MemoryStick size={14}/>,label:'Memory used',value:fmtPct(health['Memory %']),mono:false},
+    {icon:<Clock size={14}/>,label:'Uptime',value:fmtUptime(health['Uptime']),mono:true},
+    {icon:<Terminal size={14}/>,label:'OS version',value:clean(health['OS']),mono:true},
+  ];
+  const statusClass=(v:any)=>{const s=String(v).toLowerCase();if(/healthy|normal|^up$|forwarding/.test(s))return'ok';if(/warn|degrad|listening|learning/.test(s))return'warn';if(/crit|down|fault|error|block/.test(s))return'crit';return'neutral'};
+  const cell=(col:string,value:any)=>{
+    if(col==='Status'&&value!=null&&value!=='')return <span className={'dv-status dv-'+statusClass(value)}><span className="dv-dot"/>{String(value)}</span>;
+    const shown=value??'Not available from LogicMonitor';
+    return <span className={missingText(shown)?'dv-missing':undefined}>{String(shown)}</span>;
+  };
+  return <div className="detail-view">
+    <button className="dv-back" onClick={back}><ArrowLeft size={15}/> Device Fleet</button>
+    <section className="dv-hero">
+      <div className="dv-hero-accent"/>
+      <div className="dv-hero-main">
+        <span className="dv-eyebrow">{device.site} · {device.role}</span>
+        <h1 className="dv-title">{device.hostname}</h1>
+        <div className="dv-meta">
+          <span><Router size={14}/> {device.management_ip||'No management IP'}</span>
+          <span><Cpu size={14}/> {device.model||'Model pending'}</span>
+        </div>
+      </div>
+      <div className="dv-hero-state">
+        <span className="dv-chip"><span className="dv-dot"/> Monitoring state</span>
+        <div className={'dv-state-value dv-'+(device.match_status==='Matched'?'ok':'warn')}>{device.match_status}</div>
+      </div>
+    </section>
+    <div className="dv-ribbon">
+      {metrics.map(m=><div className="dv-metric" key={m.label}><span className="dv-metric-label">{m.icon} {m.label}</span><span className={'dv-metric-value'+(m.mono?' dv-metric-sm':'')}>{m.value}</span></div>)}
+    </div>
+    <nav className="dv-tabs">{data.tables.map((x:any)=><button key={x.name} className={tab===x.name?'active':''} onClick={()=>setTab(x.name)}>{x.name}</button>)}</nav>
+    <section className="dv-panel">
+      <div className="dv-panel-head">
+        <div><h2>{table.name}</h2><p>Source: {data.source}</p></div>
+        <div className="dv-panel-head-right">
+          {availability!=null&&<div className="dv-ring" style={{'--pct':availability} as any} title="24h availability"><span>{availability}%</span></div>}
+          <span className={'dv-evidence '+(table.rows.length?'available':'missing')}>{table.evidence_status}</span>
+        </div>
+      </div>
+      {table.rows.length
+        ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{table.columns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i}>{table.columns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
+        :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{table.columns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
+    </section>
+  </div>;
+}
 function APs({devices}:{devices:Device[]}){return <section className="panel"><h2>Cisco wireless access points</h2><p className="muted">9120 and 9130 operational metrics are discovered from AP or controller DataSources.</p><div className="cards compact">{devices.map(d=><article><span>{d.site}</span><strong className="device">{d.hostname}</strong><small>{d.model||'Model pending'} · {d.match_status}</small><div className="metrics"><i>Clients <b>N/A</b></i><i>Radio use <b>N/A</b></i><i>Channel <b>N/A</b></i></div></article>)}</div>{!devices.length&&<div className="empty"><Radio/><h3>No access points</h3><p>Add a 9120 or 9130 in Settings or import a CSV.</p></div>}</section>}
 const settingCategories=['General','LogicMonitor Connection','Device Inventory','Site Codes','Device Naming','Metric Mappings','Health Thresholds','SLA Targets','Collection Schedule','Reports and Retention','Users and Roles','Appearance','Audit Log'];
 function SettingsPage({reload}:{reload:()=>void}){const[section,setSection]=useState('Device Inventory');return <div className="settings-layout"><nav className="settings-nav" aria-label="Settings categories">{settingCategories.map(name=><button className={section===name?'active':''} onClick={()=>setSection(name)}>{name}</button>)}</nav><div className="settings-content">{section==='Device Inventory'?<InventorySettings reload={reload}/>:section==='Site Codes'?<SiteCodeSettings/>:section==='Device Naming'?<NamingSettings/>:section==='Appearance'?<AppearanceSettings/>:<section className="panel settings-placeholder"><h2>{section}</h2><p className="muted">This category uses the shared application configuration. No editable controls are required for the current inventory implementation.</p></section>}</div></div>}
