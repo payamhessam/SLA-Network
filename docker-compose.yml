@@ -20,6 +20,7 @@ services:
       LOCAL_USER_PASSWORD: ${LOCAL_USER_PASSWORD:-change-this-viewer-password}
       JWT_SECRET: ${JWT_SECRET:-change-this-signing-secret}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      SWITCH_COLLECTION_INTERVAL_MINUTES: ${SWITCH_COLLECTION_INTERVAL_MINUTES:-30}
     volumes: [report_data:/reports, upload_data:/data]
     depends_on: {postgres: {condition: service_healthy}}
     networks: [internal]

@@ -12,8 +12,17 @@ def latest(data):
     return dict(zip(points, values[-1])) if values else {}
 
 
+def numeric(value):
+    """Normalize LogicMonitor numeric datapoints without treating missing values as zero."""
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def percentile(values, fraction):
-    valid = sorted(float(x) for x in values if isinstance(x, (int, float)) and math.isfinite(float(x)))
+    valid = sorted(value for item in values if (value := numeric(item)) is not None)
     if not valid: return None
     return valid[min(len(valid) - 1, math.ceil(len(valid) * fraction) - 1)]
 
@@ -47,8 +56,8 @@ async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote)
     ping_pairs = results["Ping"][1]; ping_data = ping_pairs[0][1] if ping_pairs else {}; ping_now = latest(ping_data)
     pidx = {name: i for i, name in enumerate(ping_data.get("dataPoints", []))}
     rows = ping_data.get("values", [])
-    losses = [r[pidx["PingLossPercent"]] for r in rows if "PingLossPercent" in pidx]
-    avgs = [r[pidx["average"]] for r in rows if "average" in pidx]
+    losses = [value for r in rows if "PingLossPercent" in pidx and (value := numeric(r[pidx["PingLossPercent"]])) is not None]
+    avgs = [value for r in rows if "average" in pidx and (value := numeric(r[pidx["average"]])) is not None]
     availability = 100 - (sum(losses) / len(losses)) if losses else None
 
     cpu_values = [latest(data) for _, data in results["Cisco_CPU_SNMP"][1]]

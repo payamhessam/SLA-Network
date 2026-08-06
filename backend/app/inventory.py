@@ -18,6 +18,7 @@ from .auth import administrator, current_user
 from .collection import collect_logicmonitor_device, latest
 from .db import AuditEvent, Device, ImportJob, InventoryDevice, InventoryDeviceType, Site, Snapshot, Zone, session
 from .logicmonitor import LogicMonitorClient
+from .switch_refresh import refresh_switch_locked
 
 router = APIRouter(prefix="/api/v1")
 SITE_CODE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -262,18 +263,15 @@ async def inventory_uptime(item_id:int,user=Depends(current_user),db:Session=Dep
 async def open_inventory_detail(item_id:int,user=Depends(current_user),db:Session=Depends(session)):
     row=db.get(InventoryDevice,item_id)
     if not row: raise HTTPException(404,"Device not found")
-    legacy=db.scalar(select(Device).where(or_(Device.lm_device_id==row.logicmonitor_device_id,func.lower(Device.hostname)==row.generated_name.lower())))
-    if not legacy:
-        legacy=Device(hostname=row.generated_name,management_ip=row.management_ip,site=row.site.city,role=row.role,criticality=row.criticality,device_type="access_point" if row.device_type.type_code=="WAP" else ("router" if row.device_type.type_code=="RTR" else "switch"),model=row.model,active=row.enabled,lm_device_id=row.logicmonitor_device_id,match_status=row.logicmonitor_match_status,notes=row.notes);db.add(legacy);db.flush()
-    else:
-        legacy.management_ip=row.management_ip or legacy.management_ip;legacy.model=row.model or legacy.model;legacy.lm_device_id=row.logicmonitor_device_id or legacy.lm_device_id;legacy.match_status=row.logicmonitor_match_status;legacy.site=row.site.city;legacy.role=row.role
-    if row.logicmonitor_device_id:
-        client=LogicMonitorClient()
-        payload=await client.get(f"/santaba/rest/device/devices/{row.logicmonitor_device_id}")
-        remote=client.body(payload)
-        normalized=await collect_logicmonitor_device(client,legacy,remote)
-        legacy.model=normalized.get("model") or legacy.model
-        db.add(Snapshot(device_id=legacy.id,status=normalized["status"],availability=normalized["availability"],cpu=normalized["cpu"],memory=normalized["memory"],temperature=normalized["temperature"],details=normalized["details"]))
+    if row.device_type.type_code not in {"DSW", "ASW"}:
+        raise HTTPException(400,"Manual switch refresh is available only for DSW and ASW devices")
+    if not row.logicmonitor_device_id:
+        raise HTTPException(409,"Switch is not mapped to LogicMonitor")
+    try:
+        legacy=await refresh_switch_locked(db,row,user["sub"])
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(502,detail={"message":"LogicMonitor switch refresh failed","category":type(exc).__name__})
     audit(db,user["sub"],"inventory.open_detail","inventory_device",row.id,new={"legacy_device_id":legacy.id});db.commit();db.refresh(legacy)
     return {"device":{"id":legacy.id,"hostname":legacy.hostname,"management_ip":legacy.management_ip,"site":legacy.site,"role":legacy.role,"criticality":legacy.criticality,"device_type":legacy.device_type,"model":legacy.model,"active":legacy.active,"notes":legacy.notes,"lm_device_id":legacy.lm_device_id,"match_status":legacy.match_status}}
 

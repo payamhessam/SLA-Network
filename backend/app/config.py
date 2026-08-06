@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:8080"
     report_dir: str = "/reports"
     stale_minutes: int = 30
+    switch_collection_interval_minutes: int = 30
     sla_target: float = 99.9
     coverage_threshold: float = 90.0
 

@@ -1,4 +1,5 @@
-import csv, io, logging, re, time, uuid
+import asyncio, csv, io, logging, re, time, uuid
+from contextlib import suppress
 from collections import defaultdict
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -18,6 +19,7 @@ from .inventory import router as inventory_router, seed_inventory
 from .access_points import router as access_point_router
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
+from .switch_refresh import switch_refresh_loop
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -28,9 +30,19 @@ app.include_router(access_point_router)
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     Base.metadata.create_all(engine)
     with SessionLocal() as db: seed_inventory(db)
+    app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    task = getattr(app.state, "switch_refresh_task", None)
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 @app.middleware("http")
@@ -187,4 +199,4 @@ def download(filename:str, user=Depends(current_user)):
 
 @app.get("/api/v1/settings")
 def app_settings(user=Depends(administrator)):
-    return {"sla_target":settings.sla_target,"coverage_threshold":settings.coverage_threshold,"stale_minutes":settings.stale_minutes,"logicmonitor_portal":settings.lm_portal_url,"credentials_configured":bool(settings.access_id and settings.access_key)}
+    return {"sla_target":settings.sla_target,"coverage_threshold":settings.coverage_threshold,"stale_minutes":settings.stale_minutes,"switch_collection_interval_minutes":settings.switch_collection_interval_minutes,"logicmonitor_portal":settings.lm_portal_url,"credentials_configured":bool(settings.access_id and settings.access_key)}
