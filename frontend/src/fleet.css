@@ -1,0 +1,19 @@
+.device-name-link {
+  padding: 0 !important;
+  background: transparent !important;
+  color: var(--app-blue) !important;
+  border: 0 !important;
+  font: 700 13px/20px "JetBrains Mono", monospace !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.device-name-link:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+
+.inventory-panel table {
+  min-width: 850px;
+}

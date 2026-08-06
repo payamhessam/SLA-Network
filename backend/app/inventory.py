@@ -15,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .auth import administrator, current_user
-from .db import AuditEvent, Device, ImportJob, InventoryDevice, InventoryDeviceType, Site, Zone, session
+from .collection import collect_logicmonitor_device, latest
+from .db import AuditEvent, Device, ImportJob, InventoryDevice, InventoryDeviceType, Site, Snapshot, Zone, session
 from .logicmonitor import LogicMonitorClient
 
 router = APIRouter(prefix="/api/v1")
@@ -147,7 +148,29 @@ def generated(site,zone,dtype,number): return f"{site.site_code}-{zone.zone_code
 
 
 def device_json(d):
-    return {"id":d.id,"generated_name":d.generated_name,"site_code":d.site.site_code,"city":d.site.city,"zone":d.zone.zone_code,"device_type":d.device_type.type_code,"device_type_description":d.device_type.description,"device_number":d.device_number,"role":d.role,"model":d.model,"management_ip":d.management_ip,"logicmonitor_device_id":d.logicmonitor_device_id,"logicmonitor_display_name":d.logicmonitor_display_name,"logicmonitor_match_status":d.logicmonitor_match_status,"logicmonitor_match_confidence":d.logicmonitor_match_confidence,"criticality":d.criticality,"enabled":d.enabled,"last_synchronized":d.last_logicmonitor_sync,"manufacturer":d.manufacturer,"os_version":d.os_version,"logicmonitor_groups":d.logicmonitor_groups,"critical_interfaces":d.critical_interfaces,"ignored_interfaces":d.ignored_interfaces,"tags":d.tags,"notes":d.notes}
+    return {"id":d.id,"generated_name":d.generated_name,"site_code":d.site.site_code,"city":d.site.city,"province_region":d.site.province_region,"zone":d.zone.zone_code,"device_type":d.device_type.type_code,"device_type_description":d.device_type.description,"device_number":d.device_number,"role":d.role,"model":d.model,"management_ip":d.management_ip,"logicmonitor_device_id":d.logicmonitor_device_id,"logicmonitor_display_name":d.logicmonitor_display_name,"logicmonitor_match_status":d.logicmonitor_match_status,"logicmonitor_match_confidence":d.logicmonitor_match_confidence,"criticality":d.criticality,"enabled":d.enabled,"last_synchronized":d.last_logicmonitor_sync,"manufacturer":d.manufacturer,"os_version":d.os_version,"logicmonitor_groups":d.logicmonitor_groups,"critical_interfaces":d.critical_interfaces,"ignored_interfaces":d.ignored_interfaces,"tags":d.tags,"notes":d.notes}
+
+
+def readable_uptime(seconds):
+    if not isinstance(seconds,(int,float)): return None
+    total=max(0,int(seconds));days,remainder=divmod(total,86400);hours,remainder=divmod(remainder,3600);minutes,_=divmod(remainder,60)
+    years,days=divmod(days,365);weeks,days=divmod(days,7)
+    parts=[]
+    for value,label in ((years,"year"),(weeks,"week"),(days,"day"),(hours,"hour"),(minutes,"minute")):
+        if value: parts.append(f"{value} {label}{'' if value==1 else 's'}")
+    return ", ".join(parts) or "0 minutes"
+
+
+async def live_uptime(row,client):
+    if not row.logicmonitor_device_id: return {"raw_seconds":None,"display":"Pending LogicMonitor match","last_polled":None}
+    applied=await client.applied_datasources(row.logicmonitor_device_id)
+    ds=next((x for x in applied if (x.get("dataSourceName") or x.get("name"))=="SNMP_Host_Uptime"),None)
+    if not ds: return {"raw_seconds":None,"display":"Not monitored","last_polled":None}
+    instances=await client.instances(row.logicmonitor_device_id,int(ds["id"]))
+    if not instances: return {"raw_seconds":None,"display":"No uptime instance","last_polled":None}
+    end=int(datetime.now(timezone.utc).timestamp());data=await client.instance_data(row.logicmonitor_device_id,int(ds["id"]),int(instances[0]["id"]),end-3600,end);value=latest(data)
+    raw=next((value.get(k) for k in ("Uptime","uptime","sysUpTime") if isinstance(value.get(k),(int,float))),None)
+    return {"raw_seconds":raw,"display":readable_uptime(raw),"last_polled":datetime.now(timezone.utc).isoformat() if raw is not None else None}
 
 
 @router.get("/settings/sites")
@@ -217,6 +240,34 @@ def inventory_devices(q:str="",site:str|None=None,city:str|None=None,zone:str|No
 
 @router.get("/inventory/devices/{item_id}")
 def inventory_device(item_id:int,user=Depends(current_user),db:Session=Depends(session)): row=db.get(InventoryDevice,item_id);return device_json(row) if row else (_ for _ in ()).throw(HTTPException(404,"Device not found"))
+
+
+@router.get("/inventory/devices/{item_id}/uptime")
+async def inventory_uptime(item_id:int,user=Depends(current_user),db:Session=Depends(session)):
+    row=db.get(InventoryDevice,item_id)
+    if not row: raise HTTPException(404,"Device not found")
+    try: return await live_uptime(row,LogicMonitorClient())
+    except Exception as exc: return JSONResponse(status_code=502,content={"detail":"LogicMonitor uptime lookup failed","category":type(exc).__name__})
+
+
+@router.post("/inventory/devices/{item_id}/open-detail")
+async def open_inventory_detail(item_id:int,user=Depends(current_user),db:Session=Depends(session)):
+    row=db.get(InventoryDevice,item_id)
+    if not row: raise HTTPException(404,"Device not found")
+    legacy=db.scalar(select(Device).where(or_(Device.lm_device_id==row.logicmonitor_device_id,func.lower(Device.hostname)==row.generated_name.lower())))
+    if not legacy:
+        legacy=Device(hostname=row.generated_name,management_ip=row.management_ip,site=row.site.city,role=row.role,criticality=row.criticality,device_type="access_point" if row.device_type.type_code=="AP" else ("router" if row.device_type.type_code=="RTR" else "switch"),model=row.model,active=row.enabled,lm_device_id=row.logicmonitor_device_id,match_status=row.logicmonitor_match_status,notes=row.notes);db.add(legacy);db.flush()
+    else:
+        legacy.management_ip=row.management_ip or legacy.management_ip;legacy.model=row.model or legacy.model;legacy.lm_device_id=row.logicmonitor_device_id or legacy.lm_device_id;legacy.match_status=row.logicmonitor_match_status;legacy.site=row.site.city;legacy.role=row.role
+    if row.logicmonitor_device_id:
+        client=LogicMonitorClient()
+        payload=await client.get(f"/santaba/rest/device/devices/{row.logicmonitor_device_id}")
+        remote=client.body(payload)
+        normalized=await collect_logicmonitor_device(client,legacy,remote)
+        legacy.model=normalized.get("model") or legacy.model
+        db.add(Snapshot(device_id=legacy.id,status=normalized["status"],availability=normalized["availability"],cpu=normalized["cpu"],memory=normalized["memory"],temperature=normalized["temperature"],details=normalized["details"]))
+    audit(db,user["sub"],"inventory.open_detail","inventory_device",row.id,new={"legacy_device_id":legacy.id});db.commit();db.refresh(legacy)
+    return {"device":{"id":legacy.id,"hostname":legacy.hostname,"management_ip":legacy.management_ip,"site":legacy.site,"role":legacy.role,"criticality":legacy.criticality,"device_type":legacy.device_type,"model":legacy.model,"active":legacy.active,"notes":legacy.notes,"lm_device_id":legacy.lm_device_id,"match_status":legacy.match_status}}
 
 
 def save_device(body:InventoryIn,user,db,row=None,commit=True):
