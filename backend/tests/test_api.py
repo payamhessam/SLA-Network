@@ -1,6 +1,7 @@
 import os
 os.environ["DATABASE_URL"]="sqlite:///:memory:"
 os.environ["LOCAL_ADMIN_PASSWORD"]="correct-horse-battery-staple"
+os.environ.setdefault("LOCAL_USER_PASSWORD","viewer-password-long")
 os.environ["JWT_SECRET"]="test-secret-long-enough"
 from fastapi.testclient import TestClient
 from app.collection import numeric, percentile

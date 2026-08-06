@@ -9,12 +9,25 @@ os.environ.setdefault("LOCAL_USER_PASSWORD","viewer-password-long")
 os.environ.setdefault("JWT_SECRET","test-secret-long-enough")
 
 from fastapi.testclient import TestClient
+from app.inventory import physical_switch_count
 from app.main import app
 
 
 def auth(client, username="admin", password="correct-horse-battery-staple"):
     token=client.post("/api/v1/auth/login",json={"username":username,"password":password}).json()["access_token"]
     return {"Authorization":f"Bearer {token}"}
+
+
+def test_physical_switch_count_uses_unique_chassis_inventory_evidence():
+    details={"tables":{"Inventory":[
+        {"Description":"StackPort2/1","PID":"Not available from LogicMonitor","Serial Number":"MOG2743A5V2"},
+        {"Description":"C9300-24U","PID":"C9300-24U","Serial Number":"FVH2743L1C7"},
+        {"Description":"C9300-24U","PID":"C9300-24U","Serial Number":"FVH2743L14P"},
+        {"Description":"StackPort2/2","PID":"Not available from LogicMonitor","Serial Number":"MOG2744A1K5"},
+        {"Description":"Switch 2 - Power Supply A","PID":"Not available from LogicMonitor","Serial Number":"ART2731S7K"},
+    ]}}
+    assert physical_switch_count(details)==(2,"Inventory chassis serials")
+    assert physical_switch_count({})==(None,"Not monitored")
 
 
 def test_inventory_naming_sites_zones_permissions_and_audit():

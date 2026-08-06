@@ -152,8 +152,43 @@ def refs(db, body):
 def generated(site,zone,dtype,number): return f"{site.site_code}-{zone.zone_code}-{dtype.type_code}-{number}"
 
 
-def device_json(d):
-    return {"id":d.id,"generated_name":d.generated_name,"site_code":d.site.site_code,"city":d.site.city,"province_region":d.site.province_region,"zone":d.zone.zone_code,"device_type":d.device_type.type_code,"device_type_description":d.device_type.description,"device_number":d.device_number,"role":d.role,"model":d.model,"management_ip":d.management_ip,"logicmonitor_device_id":d.logicmonitor_device_id,"logicmonitor_display_name":d.logicmonitor_display_name,"logicmonitor_match_status":d.logicmonitor_match_status,"logicmonitor_match_confidence":d.logicmonitor_match_confidence,"criticality":d.criticality,"enabled":d.enabled,"last_synchronized":d.last_logicmonitor_sync,"manufacturer":d.manufacturer,"os_version":d.os_version,"logicmonitor_groups":d.logicmonitor_groups,"critical_interfaces":d.critical_interfaces,"ignored_interfaces":d.ignored_interfaces,"tags":d.tags,"notes":d.notes}
+CHASSIS_PID = re.compile(r"^(?:C\d{4}[A-Z0-9-]*|WS-C\d{4}[A-Z0-9-]*)$", re.I)
+STACK_MEMBER = re.compile(r"StackPort\s*(\d+)\s*/", re.I)
+
+
+def physical_switch_count(details):
+    """Count physical chassis from authoritative collected inventory evidence."""
+    rows = ((details or {}).get("tables") or {}).get("Inventory") or []
+    chassis_serials = set()
+    stack_members = set()
+    for row in rows:
+        description = str(row.get("Description") or "").strip()
+        pid = str(row.get("PID") or "").strip()
+        serial = str(row.get("Serial Number") or "").strip().upper()
+        model = pid if CHASSIS_PID.fullmatch(pid) else (description if CHASSIS_PID.fullmatch(description) else "")
+        if model and serial and serial.lower() != "not available from logicmonitor":
+            chassis_serials.add(serial)
+        match = STACK_MEMBER.search(description)
+        if match:
+            stack_members.add(int(match.group(1)))
+    if chassis_serials:
+        return len(chassis_serials), "Inventory chassis serials"
+    if stack_members:
+        return len(stack_members), "Stack-port member evidence"
+    return None, "Not monitored"
+
+
+def switch_evidence(db, d):
+    if d.device_type.type_code not in {"DSW", "ASW"}:
+        return None, "Not applicable"
+    legacy = db.scalar(select(Device).where(Device.lm_device_id == d.logicmonitor_device_id)) if d.logicmonitor_device_id else None
+    snapshot = db.scalar(select(Snapshot).where(Snapshot.device_id == legacy.id).order_by(Snapshot.collected_at.desc()).limit(1)) if legacy else None
+    return physical_switch_count(snapshot.details if snapshot else None)
+
+
+def device_json(d, db=None):
+    count, source = switch_evidence(db, d) if db else (None, "Not loaded")
+    return {"id":d.id,"generated_name":d.generated_name,"site_code":d.site.site_code,"city":d.site.city,"province_region":d.site.province_region,"zone":d.zone.zone_code,"device_type":d.device_type.type_code,"device_type_description":d.device_type.description,"device_number":d.device_number,"physical_switch_count":count,"physical_switch_count_source":source,"role":d.role,"model":d.model,"management_ip":d.management_ip,"logicmonitor_device_id":d.logicmonitor_device_id,"logicmonitor_display_name":d.logicmonitor_display_name,"logicmonitor_match_status":d.logicmonitor_match_status,"logicmonitor_match_confidence":d.logicmonitor_match_confidence,"criticality":d.criticality,"enabled":d.enabled,"last_synchronized":d.last_logicmonitor_sync,"manufacturer":d.manufacturer,"os_version":d.os_version,"logicmonitor_groups":d.logicmonitor_groups,"critical_interfaces":d.critical_interfaces,"ignored_interfaces":d.ignored_interfaces,"tags":d.tags,"notes":d.notes}
 
 
 def readable_uptime(seconds):
@@ -181,7 +216,12 @@ async def live_uptime(row,client):
 @router.get("/settings/sites")
 def sites(q:str="", user=Depends(current_user), db:Session=Depends(session)):
     rows=db.scalars(select(Site).where(or_(Site.site_code.ilike(f"%{q}%"),Site.city.ilike(f"%{q}%"))).order_by(Site.site_code)).all()
-    return [{"id":x.id,"site_code":x.site_code,"city":x.city,"province_region":x.province_region,"country":x.country,"description":x.description,"enabled":x.enabled,"number_of_devices":db.scalar(select(func.count(InventoryDevice.id)).where(InventoryDevice.site_id==x.id)),"last_modified":x.updated_at,"modified_by":x.updated_by} for x in rows]
+    response=[]
+    for x in rows:
+        switches=db.scalars(select(InventoryDevice).join(InventoryDeviceType).where(InventoryDevice.site_id==x.id,InventoryDeviceType.type_code.in_(("DSW","ASW")))).all()
+        evidence=[switch_evidence(db,d)[0] for d in switches]
+        response.append({"id":x.id,"site_code":x.site_code,"city":x.city,"province_region":x.province_region,"country":x.country,"description":x.description,"enabled":x.enabled,"number_of_devices":sum(value for value in evidence if value is not None),"switch_count_pending":sum(value is None for value in evidence),"last_modified":x.updated_at,"modified_by":x.updated_by})
+    return response
 
 
 @router.post("/settings/sites",status_code=201)
@@ -244,11 +284,11 @@ def inventory_devices(q:str="",site:str|None=None,city:str|None=None,zone:str|No
     sort_map={"generated_name":InventoryDevice.generated_name,"site":Site.site_code,"city":Site.city,"zone":Zone.zone_code,"device_type":InventoryDeviceType.type_code,"model":InventoryDevice.model,"last_synchronized":InventoryDevice.last_logicmonitor_sync}
     stmt=stmt.order_by((sort_map.get(sort,InventoryDevice.generated_name).desc() if direction=="desc" else sort_map.get(sort,InventoryDevice.generated_name).asc()))
     all_rows=db.scalars(stmt).all();start=(page-1)*page_size
-    return {"items":[device_json(x) for x in all_rows[start:start+page_size]],"total":len(all_rows),"page":page,"page_size":page_size,"pages":max(1,(len(all_rows)+page_size-1)//page_size)}
+    return {"items":[device_json(x,db) for x in all_rows[start:start+page_size]],"total":len(all_rows),"page":page,"page_size":page_size,"pages":max(1,(len(all_rows)+page_size-1)//page_size)}
 
 
 @router.get("/inventory/devices/{item_id}")
-def inventory_device(item_id:int,user=Depends(current_user),db:Session=Depends(session)): row=db.get(InventoryDevice,item_id);return device_json(row) if row else (_ for _ in ()).throw(HTTPException(404,"Device not found"))
+def inventory_device(item_id:int,user=Depends(current_user),db:Session=Depends(session)): row=db.get(InventoryDevice,item_id);return device_json(row,db) if row else (_ for _ in ()).throw(HTTPException(404,"Device not found"))
 
 
 @router.get("/inventory/devices/{item_id}/uptime")
