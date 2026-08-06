@@ -14,6 +14,7 @@ from .collection import collect_logicmonitor_device
 from .config import get_settings
 from .db import AuditEvent, Base, Device, SessionLocal, Snapshot, engine, session
 from .logicmonitor import LogicMonitorClient, match_device
+from .inventory import router as inventory_router, seed_inventory
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 
@@ -21,10 +22,13 @@ settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
+app.include_router(inventory_router)
 
 
 @app.on_event("startup")
-def startup(): Base.metadata.create_all(engine)
+def startup():
+    Base.metadata.create_all(engine)
+    with SessionLocal() as db: seed_inventory(db)
 
 
 @app.middleware("http")
