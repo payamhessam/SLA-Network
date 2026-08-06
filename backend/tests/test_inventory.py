@@ -22,8 +22,8 @@ def test_inventory_naming_sites_zones_permissions_and_audit():
         assert any(x["site_code"]=="CAD03" and x["city"]=="Quebec City" for x in sites)
         assert len(client.get("/api/v1/settings/zones",headers=admin).json())==9
         types={x["type_code"]:x["derived_role"] for x in client.get("/api/v1/settings/device-types",headers=admin).json()}
-        assert types=={"DSW":"Distribution","ASW":"Access","RTR":"Router","AP":"Access Point"}
-        expected=[("Z01","DSW","01","CAD03-Z01-DSW-01","Distribution"),("Z02","ASW","02","CAD03-Z02-ASW-02","Access"),("Z01","RTR","01","CAD03-Z01-RTR-01","Router"),("Z03","AP","03","CAD03-Z03-AP-03","Access Point")]
+        assert types=={"DSW":"Distribution","ASW":"Access","RTR":"Router","WAP":"Access Point"}
+        expected=[("Z01","DSW","01","CAD03-Z01-DSW-01","Distribution"),("Z02","ASW","02","CAD03-Z02-ASW-02","Access"),("Z01","RTR","01","CAD03-Z01-RTR-01","Router"),("Z03","WAP","03","CAD03-Z03-WAP-03","Access Point")]
         for zone,dtype,number,name,role in expected:
             result=client.post("/api/v1/inventory/preview-name",headers=admin,json={"site_code":"CAD03","zone":zone,"device_type":dtype,"device_number":number})
             assert result.status_code==200 and result.json()["generated_name"]==name and result.json()["role"]==role and result.json()["city"]=="Quebec City"
@@ -41,7 +41,7 @@ def test_device_duplicates_template_and_transactional_import():
         assert client.post("/api/v1/inventory/devices",headers=h,json=duplicate_ip).status_code==409
         template=client.get("/api/v1/inventory/import/template",headers=h)
         assert template.status_code==200 and template.content[:2]==b"PK"
-        csv=b"SiteCode,Zone,DeviceType,DeviceNumber,Criticality,Enabled\nCAD03,Z08,AP,96,Medium,true\nBAD,Z01,DSW,01,Medium,true\n"
+        csv=b"SiteCode,Zone,DeviceType,DeviceNumber,Criticality,Enabled\nCAD03,Z08,WAP,96,Medium,true\nBAD,Z01,DSW,01,Medium,true\n"
         validation=client.post("/api/v1/inventory/import/validate",headers=h,files={"file":("test.csv",BytesIO(csv),"text/csv")}).json()
         assert validation["summary"]=={"total":2,"ready":1,"errors":1}
         assert client.post(f"/api/v1/inventory/import/commit?job_id={validation['job_id']}&mode=all_or_nothing",headers=h).status_code==422

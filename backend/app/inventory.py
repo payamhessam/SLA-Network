@@ -31,7 +31,7 @@ DEFAULT_SITES = [
     ("CA08","Winnipeg","MB"),("CAD08","Winnipeg","MB"),("CA15","Guelph","ON"),("MCA","Mississauga","ON"),("YRK","Toronto","ON"),
     ("CAD15","Mississauga","ON"),("CA06","Dartmouth","NS"),("CA07","Paradise","NL"),("CA20","Terrebonne","MO"),("CAD20","Montreal","QC"),
     ("CAD02","Ottawa","OT"),("CAD03","Quebec City","QC"),("CAD04","London","LO"),("CAD06","Halifax","NX")]
-DEFAULT_TYPES = [("DSW","Distribution Switch","Distribution"),("ASW","Access Switch","Access"),("RTR","Router","Router"),("AP","Access Point","Access Point")]
+DEFAULT_TYPES = [("DSW","Distribution Switch","Distribution"),("ASW","Access Switch","Access"),("RTR","Router","Router"),("WAP","Access Point","Access Point")]
 
 
 def seed_inventory(db: Session):
@@ -41,6 +41,13 @@ def seed_inventory(db: Session):
         db.add_all([Zone(zone_code=f"Z{i:02d}", description=f"Zone {i}", display_order=i) for i in range(1,10)])
     if not db.scalar(select(func.count(InventoryDeviceType.id))):
         db.add_all([InventoryDeviceType(type_code=c,description=d,derived_role=r,display_order=i) for i,(c,d,r) in enumerate(DEFAULT_TYPES,1)])
+    else:
+        old_ap=db.scalar(select(InventoryDeviceType).where(InventoryDeviceType.type_code=="AP"))
+        wap=db.scalar(select(InventoryDeviceType).where(InventoryDeviceType.type_code=="WAP"))
+        if old_ap and not wap:
+            old_ap.type_code="WAP"
+            for device in db.scalars(select(InventoryDevice).where(InventoryDevice.device_type_id==old_ap.id)).all():
+                device.generated_name=re.sub(r"-AP-(\d{2})$",r"-WAP-\1",device.generated_name)
     db.commit()
 
 
@@ -256,7 +263,7 @@ async def open_inventory_detail(item_id:int,user=Depends(current_user),db:Sessio
     if not row: raise HTTPException(404,"Device not found")
     legacy=db.scalar(select(Device).where(or_(Device.lm_device_id==row.logicmonitor_device_id,func.lower(Device.hostname)==row.generated_name.lower())))
     if not legacy:
-        legacy=Device(hostname=row.generated_name,management_ip=row.management_ip,site=row.site.city,role=row.role,criticality=row.criticality,device_type="access_point" if row.device_type.type_code=="AP" else ("router" if row.device_type.type_code=="RTR" else "switch"),model=row.model,active=row.enabled,lm_device_id=row.logicmonitor_device_id,match_status=row.logicmonitor_match_status,notes=row.notes);db.add(legacy);db.flush()
+        legacy=Device(hostname=row.generated_name,management_ip=row.management_ip,site=row.site.city,role=row.role,criticality=row.criticality,device_type="access_point" if row.device_type.type_code=="WAP" else ("router" if row.device_type.type_code=="RTR" else "switch"),model=row.model,active=row.enabled,lm_device_id=row.logicmonitor_device_id,match_status=row.logicmonitor_match_status,notes=row.notes);db.add(legacy);db.flush()
     else:
         legacy.management_ip=row.management_ip or legacy.management_ip;legacy.model=row.model or legacy.model;legacy.lm_device_id=row.logicmonitor_device_id or legacy.lm_device_id;legacy.match_status=row.logicmonitor_match_status;legacy.site=row.site.city;legacy.role=row.role
     if row.logicmonitor_device_id:

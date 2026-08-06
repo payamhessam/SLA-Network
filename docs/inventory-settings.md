@@ -10,7 +10,7 @@ Names are generated as `[SITE CODE]-[ZONE]-[DEVICE TYPE]-[DEVICE NUMBER]`. City 
 
 ## Seed data
 
-The administrator-supplied Canadian site list is inserted only when the sites table is empty. Zones Z01–Z09 and DSW/ASW/RTR/AP mappings are seeded the same way. Thereafter these are local database records managed through Settings; they are not hard-coded selection lists in the browser.
+The administrator-supplied Canadian site list is inserted only when the sites table is empty. Zones Z01–Z09 and DSW/ASW/RTR/WAP mappings are seeded the same way. Thereafter these are local database records managed through Settings; they are not hard-coded selection lists in the browser.
 
 ## API and permissions
 
