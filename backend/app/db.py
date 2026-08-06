@@ -135,6 +135,39 @@ class ImportJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class AccessPointInventory(Base):
+    __tablename__ = "access_point_inventory"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ap_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    site_code: Mapped[str] = mapped_column(String(20), index=True)
+    city: Mapped[str | None] = mapped_column(String(120))
+    province: Mapped[str | None] = mapped_column(String(80))
+    country: Mapped[str | None] = mapped_column(String(80))
+    ap_model: Mapped[str | None] = mapped_column(String(120), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(45), index=True)
+    ethernet_mac: Mapped[str | None] = mapped_column(String(17), index=True)
+    radio_mac: Mapped[str | None] = mapped_column(String(17), index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(120), index=True)
+    import_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    imported_by: Mapped[str] = mapped_column(String(120))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AccessPointImport(Base):
+    __tablename__ = "access_point_imports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    imported_by: Mapped[str] = mapped_column(String(120))
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_checksum: Mapped[str] = mapped_column(String(64))
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    validation_errors: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    import_mode: Mapped[str] = mapped_column(String(20), default="replace")
+    status: Mapped[str] = mapped_column(String(30), default="Validated")
+    rows: Mapped[list] = mapped_column(JSON, default=list)
+
+
 database_url = get_settings().database_url
 engine = create_engine(database_url, pool_pre_ping=True, **({"connect_args":{"check_same_thread":False},"poolclass":StaticPool} if database_url.startswith("sqlite") else {}))
 SessionLocal = sessionmaker(engine, expire_on_commit=False)

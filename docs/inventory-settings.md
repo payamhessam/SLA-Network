@@ -10,7 +10,13 @@ Names are generated as `[SITE CODE]-[ZONE]-[DEVICE TYPE]-[DEVICE NUMBER]`. City 
 
 ## Seed data
 
-The administrator-supplied Canadian site list is inserted only when the sites table is empty. Zones Z01–Z09 and DSW/ASW/RTR/WAP mappings are seeded the same way. Thereafter these are local database records managed through Settings; they are not hard-coded selection lists in the browser.
+The administrator-supplied Canadian site list is inserted only when the sites table is empty. Zones Z01–Z09 and DSW/ASW/RTR mappings are seeded the same way. Thereafter these are local database records managed through Settings; they are not hard-coded selection lists in the browser. Wireless access points are deliberately excluded from device naming and bulk device import.
+
+## Access Point inventory
+
+Access points use a separate static inventory populated from an administrator-uploaded controller `.xlsx` export. The importer requires the exact AP Name, AP Model, IP Address, AP Radio MAC, Ethernet MAC, Serial Number, and Site Tag headers, ignores unrelated columns, and derives location from the local Site Code table. Replace mode is the default; Merge mode is optional. Validation results and import history are retained locally with the file checksum and audit metadata.
+
+Online and Offline are calculated when the page is requested by comparing Ethernet MAC, AP name, then radio MAC against the latest locally stored CDP/LLDP neighbor evidence. The status is not persisted and the application never writes access-point data to LogicMonitor.
 
 ## API and permissions
 

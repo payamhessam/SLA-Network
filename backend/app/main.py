@@ -15,6 +15,7 @@ from .config import get_settings
 from .db import AuditEvent, Base, Device, SessionLocal, Snapshot, engine, session
 from .logicmonitor import LogicMonitorClient, match_device
 from .inventory import router as inventory_router, seed_inventory
+from .access_points import router as access_point_router
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 
@@ -23,6 +24,7 @@ app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_u
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 app.include_router(inventory_router)
+app.include_router(access_point_router)
 
 
 @app.on_event("startup")

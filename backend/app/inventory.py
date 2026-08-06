@@ -31,7 +31,7 @@ DEFAULT_SITES = [
     ("CA08","Winnipeg","MB"),("CAD08","Winnipeg","MB"),("CA15","Guelph","ON"),("MCA","Mississauga","ON"),("YRK","Toronto","ON"),
     ("CAD15","Mississauga","ON"),("CA06","Dartmouth","NS"),("CA07","Paradise","NL"),("CA20","Terrebonne","MO"),("CAD20","Montreal","QC"),
     ("CAD02","Ottawa","OT"),("CAD03","Quebec City","QC"),("CAD04","London","LO"),("CAD06","Halifax","NX")]
-DEFAULT_TYPES = [("DSW","Distribution Switch","Distribution"),("ASW","Access Switch","Access"),("RTR","Router","Router"),("WAP","Access Point","Access Point")]
+DEFAULT_TYPES = [("DSW","Distribution Switch","Distribution"),("ASW","Access Switch","Access"),("RTR","Router","Router")]
 
 
 def seed_inventory(db: Session):
@@ -42,12 +42,9 @@ def seed_inventory(db: Session):
     if not db.scalar(select(func.count(InventoryDeviceType.id))):
         db.add_all([InventoryDeviceType(type_code=c,description=d,derived_role=r,display_order=i) for i,(c,d,r) in enumerate(DEFAULT_TYPES,1)])
     else:
-        old_ap=db.scalar(select(InventoryDeviceType).where(InventoryDeviceType.type_code=="AP"))
-        wap=db.scalar(select(InventoryDeviceType).where(InventoryDeviceType.type_code=="WAP"))
-        if old_ap and not wap:
-            old_ap.type_code="WAP"
-            for device in db.scalars(select(InventoryDevice).where(InventoryDevice.device_type_id==old_ap.id)).all():
-                device.generated_name=re.sub(r"-AP-(\d{2})$",r"-WAP-\1",device.generated_name)
+        for wireless in db.scalars(select(InventoryDeviceType).where(InventoryDeviceType.type_code.in_(("AP","WAP")))).all():
+            if not db.scalar(select(func.count(InventoryDevice.id)).where(InventoryDevice.device_type_id==wireless.id)): db.delete(wireless)
+            else: wireless.enabled=False
     db.commit()
 
 
@@ -218,11 +215,15 @@ def edit_zone(item_id:int,body:ZoneIn,user=Depends(administrator),db:Session=Dep
 
 
 @router.get("/settings/device-types")
-def device_types(user=Depends(current_user),db:Session=Depends(session)): return [{"id":x.id,"type_code":x.type_code,"description":x.description,"derived_role":x.derived_role,"enabled":x.enabled,"display_order":x.display_order} for x in db.scalars(select(InventoryDeviceType).order_by(InventoryDeviceType.display_order)).all()]
+def device_types(user=Depends(current_user),db:Session=Depends(session)): return [{"id":x.id,"type_code":x.type_code,"description":x.description,"derived_role":x.derived_role,"enabled":x.enabled,"display_order":x.display_order} for x in db.scalars(select(InventoryDeviceType).where(InventoryDeviceType.type_code.not_in(("AP","WAP"))).order_by(InventoryDeviceType.display_order)).all()]
 @router.post("/settings/device-types",status_code=201)
-def add_type(body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(session)): row=InventoryDeviceType(**body.model_dump());db.add(row);db.commit();db.refresh(row);return {"id":row.id,**body.model_dump()}
+def add_type(body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(session)):
+    if body.type_code in ("AP","WAP"): raise HTTPException(422,"Wireless access points must be imported through Access Point Inventory")
+    row=InventoryDeviceType(**body.model_dump());db.add(row);db.commit();db.refresh(row);return {"id":row.id,**body.model_dump()}
 @router.put("/settings/device-types/{item_id}")
-def edit_type(item_id:int,body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(session)): row=db.get(InventoryDeviceType,item_id) or (_ for _ in ()).throw(HTTPException(404,"Device type not found"));[setattr(row,k,v) for k,v in body.model_dump().items()];audit(db,user["sub"],"device_type.update","device_type",item_id,new=body.model_dump());db.commit();return {"id":row.id,**body.model_dump()}
+def edit_type(item_id:int,body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(session)):
+    if body.type_code in ("AP","WAP"): raise HTTPException(422,"Wireless access points must be imported through Access Point Inventory")
+    row=db.get(InventoryDeviceType,item_id) or (_ for _ in ()).throw(HTTPException(404,"Device type not found"));[setattr(row,k,v) for k,v in body.model_dump().items()];audit(db,user["sub"],"device_type.update","device_type",item_id,new=body.model_dump());db.commit();return {"id":row.id,**body.model_dump()}
 
 
 @router.post("/inventory/preview-name")
