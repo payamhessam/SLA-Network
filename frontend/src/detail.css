@@ -108,6 +108,15 @@
 .dv-column-list{display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
 .dv-column-list span{font-family:var(--dv-mono);font-size:11px;background:var(--dv-surface-low);border:1px solid var(--dv-surface-highest);border-radius:4px;padding:5px 8px;color:var(--dv-on-variant)}
 
+/* CDP-LLDP neighbor topology (fixed dark command-center canvas) */
+.dv-topo{position:relative;overflow:auto;padding:16px;min-height:440px;background-color:#0b0f10;background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:24px 24px}
+.dv-topo-svg{display:block;width:100%;height:auto;max-height:660px;margin:0 auto}
+.dv-topo-legend{position:absolute;top:16px;left:16px;z-index:2;pointer-events:none;background:rgba(28,32,34,.92);border:1px solid #313537;border-radius:8px;padding:10px 12px;font-family:var(--dv-mono)}
+.dv-topo-title{font-size:13px;font-weight:600;color:#e0e3e5;margin-bottom:2px}
+.dv-topo-sub{font-size:11px;color:#c2c6d2;margin-bottom:8px}
+.dv-legend-row{display:flex;align-items:center;gap:7px;font-size:11px;color:#c2c6d2;line-height:1.7}
+.dv-legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+
 @media(max-width:820px){
   .dv-ribbon{grid-template-columns:repeat(2,1fr)}
   .dv-title{font-size:24px}

@@ -9,12 +9,57 @@ function Login({done}:{done:()=>void}){const[account,setAccount]=useState<'user'
 function App(){const[ready,setReady]=useState(!!getToken());const[role,setRole]=useState('');const[page,setPage]=useState('Overview');const[selected,setSelected]=useState<Device|null>(null);const[devices,setDevices]=useState<Device[]>([]);const[error,setError]=useState('');const[dark,setDark]=useState(()=>localStorage.getItem('theme')!=='light'&&(localStorage.getItem('theme')==='dark'||matchMedia('(prefers-color-scheme: dark)').matches));const load=()=>api('/devices').then(setDevices).catch(x=>setError(x.message));useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('theme',dark?'dark':'light')},[dark]);useEffect(()=>{if(ready){api('/auth/me').then(x=>setRole(x.role));load()}},[ready]);if(!ready)return <Login done={()=>setReady(true)}/>;const navigate=(x:string)=>{setSelected(null);setPage(x)};const menu=['Overview','Device Fleet','Access Points',...(role==='Administrator'?['Settings']:[])];return <div className="shell"><aside><div className="brand">MEDLINE <span>CANADA</span></div>{menu.map(x=><button className={page===x&&!selected?'active':''} onClick={()=>navigate(x)}>{x}</button>)}<button className="logout" onClick={()=>{clearToken();setReady(false)}}><LogOut size={16}/> Sign out</button></aside><main><header><div><span className="eyebrow">MEDLINE CANADA · ENTERPRISE NETWORK</span><h1>{selected?selected.hostname:page}</h1></div><div className="header-actions"><button className="app-theme-toggle" onClick={()=>setDark(!dark)} aria-label={`Use ${dark?'light':'dark'} mode`}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><span className="secure"><ShieldCheck size={16}/> {role||'Authenticated'}</span></div></header>{error&&<div className="banner">{error}</div>}{selected?<DeviceDetail device={selected} back={()=>setSelected(null)}/>:<>{page==='Overview'&&<Overview devices={devices}/>} {page==='Device Fleet'&&<InventoryFleet token={getToken()||''} open={setSelected}/>} {page==='Access Points'&&<AccessPoints token={getToken()||''} administrator={role==='Administrator'}/>} {page==='Settings'&&role==='Administrator'&&<SettingsPage reload={load}/>}</>}</main></div>}
 function Overview({devices}:{devices:Device[]}){const cards=[['Enterprise SLA','N/A','Baseline pending'],['Active devices',devices.filter(x=>x.active).length,'Local inventory'],['Access points',devices.filter(x=>x.device_type==='access_point').length,'Cisco 9120 / 9130'],['Monitoring gaps',devices.filter(x=>x.match_status!=='Matched').length,'Requires mapping']];return <><section className="cards">{cards.map(c=><article><span>{c[0]}</span><strong>{c[1]}</strong><small>{c[2]}</small></article>)}</section><section className="panel"><h2>Operational posture</h2><div className="empty"><Radio/><h3>Collection baseline pending</h3><p>Add devices in Settings, configure runtime LogicMonitor secrets, then run collection. Missing evidence is never converted to zero.</p></div></section></>}
 function Fleet({devices,reload,open}:{devices:Device[],reload:()=>void,open:(d:Device)=>void}){return <section className="panel"><div className="panelhead"><h2>Managed inventory</h2><button onClick={async()=>{await api('/reports/generate',{method:'POST'});alert('Report generated')}}><FileDown size={16}/> Generate report</button></div><table><thead><tr><th>Device</th><th>Site</th><th>Role</th><th>Model</th><th>Type</th><th>Mapping</th><th></th></tr></thead><tbody>{devices.map(d=><tr className="clickrow" onClick={()=>open(d)}><td><b className="device-link">{d.hostname}</b><small>{d.management_ip||'No IP'}</small></td><td>{d.site}</td><td>{d.role}</td><td>{d.model||'Not available'}</td><td><span className="pill">{d.device_type.replace('_',' ')}</span></td><td>{d.match_status}</td><td><button className="icon" aria-label="Delete" onClick={async e=>{e.stopPropagation();if(confirm(`Remove ${d.hostname} from local inventory?`)){await api('/devices/'+d.id,{method:'DELETE'});reload()}}}><Trash2 size={16}/></button></td></tr>)}</tbody></table>{!devices.length&&<div className="empty">No devices configured.</div>}</section>}
+function nodeGlyph(kind:string,cx:number,cy:number,color:string,scale=1){
+  const s=(v:number)=>v*scale;
+  if(kind==='ap')return <g transform={`translate(${cx} ${cy})`} stroke={color} strokeWidth={1.6} fill="none" strokeLinecap="round"><path d={`M ${-s(9)} ${-s(1)} A ${s(9)} ${s(9)} 0 0 1 ${s(9)} ${-s(1)}`}/><path d={`M ${-s(5.5)} ${s(2.5)} A ${s(5.5)} ${s(5.5)} 0 0 1 ${s(5.5)} ${s(2.5)}`}/><circle cx={0} cy={s(6)} r={s(1.7)} fill={color} stroke="none"/></g>;
+  if(kind==='sw')return <g transform={`translate(${cx} ${cy})`} stroke={color} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x={-s(11)} y={-s(7)} width={s(22)} height={s(14)} rx={s(2)}/><line x1={-s(11)} y1={0} x2={s(11)} y2={0}/><circle cx={-s(6)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/><circle cx={-s(2)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/><circle cx={s(2)} cy={s(3.6)} r={s(0.9)} fill={color} stroke="none"/></g>;
+  return <g transform={`translate(${cx} ${cy})`} stroke={color} strokeWidth={1.6} fill="none" strokeLinecap="round"><rect x={-s(8)} y={-s(8)} width={s(16)} height={s(16)} rx={s(2)}/><line x1={-s(8)} y1={-s(2)} x2={s(8)} y2={-s(2)}/></g>;
+}
+function abbrevPort(p:string|null){
+  if(!p)return p;
+  const map:[string,string][]=[['TwentyFiveGigE','Twe'],['TenGigabitEthernet','Te'],['FortyGigabitEthernet','Fo'],['HundredGigE','Hu'],['GigabitEthernet','Gi'],['FastEthernet','Fa'],['Ethernet','Eth'],['Port-channel','Po'],['Management','Mgmt'],['Loopback','Lo']];
+  for(const[lng,sh]of map){if(p.toLowerCase().startsWith(lng.toLowerCase()))return sh+p.slice(lng.length)}
+  return p;
+}
+function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
+  const parse=(r:any)=>{const li=String(r['Local Interface']||'');const m=li.match(/ on (\S+)(?: via (\S+))?/i);return{name:String(r['Neighbor']||li||'Unknown'),protocol:String(r['Protocol']||'').toUpperCase(),local:m?m[1]:null,remote:m&&m[2]?m[2]:null}};
+  const nb=rows.map(parse);
+  const prefix=(()=>{const parts=device.hostname.split('-');return parts.length>=3?parts.slice(0,2).join('-')+'-':''})();
+  const short=(name:string)=>prefix&&name.toLowerCase().startsWith(prefix.toLowerCase())?name.slice(prefix.length):name;
+  const kind=(name:string)=>/wap|(?:^|[-_])ap(?:[-_]|$)/i.test(name)?'ap':/dsw|asw|sw|switch|rtr|router/i.test(name)?'sw':'dev';
+  const color=(p:string)=>p==='CDP'?'#a8caef':'#75d2fb';
+  const N=nb.length;
+  const R=Math.max(160,Math.min(150+N*12,360));
+  const pad=160,vb=2*(R+pad);
+  const nodeR=22,centerR=32;
+  const pos=(i:number)=>{const a=(-90+i*360/Math.max(1,N))*Math.PI/180;return{a,x:R*Math.cos(a),y:R*Math.sin(a)}};
+  const F='\'JetBrains Mono\',ui-monospace,monospace';
+  return <div className="dv-topo">
+    <div className="dv-topo-legend">
+      <div className="dv-topo-title">{device.hostname}</div>
+      <div className="dv-topo-sub">{N} CDP/LLDP neighbor{N===1?'':'s'}{prefix?` · ${prefix}…`:''}</div>
+      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:'#75d2fb'}}/> LLDP</div>
+      <div className="dv-legend-row"><span className="dv-legend-dot" style={{background:'#a8caef'}}/> CDP</div>
+    </div>
+    <svg className="dv-topo-svg" viewBox={`${-(R+pad)} ${-(R+pad)} ${vb} ${vb}`} role="img" aria-label={`CDP and LLDP neighbor topology for ${device.hostname}`}>
+      {nb.map((n,i)=>{const{x,y}=pos(i);return <line key={'l'+i} x1={0} y1={0} x2={x} y2={y} stroke={color(n.protocol)} strokeWidth={2} strokeOpacity={0.5} strokeDasharray={n.protocol==='CDP'?'6 5':undefined}/>})}
+      {nb.map((n,i)=>{if(!n.local&&!n.remote)return null;const{x,y}=pos(i);const lx=x*0.55,ly=y*0.55;const lp=abbrevPort(n.local),rp=abbrevPort(n.remote);const two=!!(lp&&rp);const w=Math.max((lp||'').length,rp?rp.length+2:0)*6.2+12;return <g key={'p'+i}><title>{`local ${n.local||'—'}  ·  remote ${n.remote||'—'}`}</title><rect x={lx-w/2} y={ly-(two?14:8)} width={w} height={two?28:16} rx={3} fill="#0b0f10" stroke="#313537"/>{lp&&<text x={lx} y={ly+(two?-2:3)} textAnchor="middle" fontFamily={F} fontSize={9} fill="#e0e3e5">{lp}</text>}{rp&&<text x={lx} y={ly+(two?11:3)} textAnchor="middle" fontFamily={F} fontSize={9} fill="#8fb0c8">{'→ '+rp}</text>}</g>})}
+      {nb.map((n,i)=>{const{a,x,y}=pos(i);const lbl=short(n.name)||n.name;const lr=R+nodeR+16;const lx=lr*Math.cos(a),ly=lr*Math.sin(a);const w=lbl.length*6.6+12;return <g key={'n'+i}><circle cx={x} cy={y} r={nodeR} fill="#181c1e" stroke={color(n.protocol)} strokeWidth={2}/>{nodeGlyph(kind(n.name),x,y,color(n.protocol))}<title>{`${n.name}${n.remote?` · remote ${n.remote}`:''}${n.local?` · local ${n.local}`:''} · ${n.protocol}`}</title><rect x={lx-w/2} y={ly-9} width={w} height={18} rx={4} fill="#1c2022" stroke="#424751"/><text x={lx} y={ly+4} textAnchor="middle" fontFamily={F} fontSize={10} fill="#e0e3e5">{lbl}</text></g>})}
+      <circle cx={0} cy={0} r={centerR} fill="#1c2022" stroke="#a6c8ff" strokeWidth={2.5}/>
+      {nodeGlyph('sw',0,0,'#a6c8ff',1.25)}
+      <rect x={-(device.hostname.length*6.6+14)/2} y={centerR+6} width={device.hostname.length*6.6+14} height={20} rx={4} fill="#00539b" stroke="#a6c8ff"/>
+      <text x={0} y={centerR+20} textAnchor="middle" fontFamily={F} fontSize={11} fontWeight={600} fill="#d4e3ff">{device.hostname}</text>
+    </svg>
+  </div>;
+}
 function DeviceDetail({device,back}:{device:Device,back:()=>void}){
   const[data,setData]=useState<any>(null);
   const[tab,setTab]=useState('Health Data');
   useEffect(()=>{api(`/devices/${device.id}/detail`).then(setData)},[device.id]);
   if(!data)return <div className="detail-view"><div className="dv-panel dv-loading">Loading device details…</div></div>;
   const table=data.tables.find((x:any)=>x.name===tab)||data.tables[0];
+  const HIDDEN_COLUMNS:{[k:string]:string[]}={'CDP-LLDP Neighbors':['Management IP','Platform/Model','Remote Port']};
+  const displayColumns=table.columns.filter((c:string)=>!(HIDDEN_COLUMNS[table.name]||[]).includes(c));
   const rowsOf=(name:string)=>(data.tables.find((x:any)=>x.name===name)?.rows||[]);
   const health=rowsOf('Health Data')[0]||{};
   const ping=rowsOf('Ping Quality')[0]||{};
@@ -65,9 +110,11 @@ function DeviceDetail({device,back}:{device:Device,back:()=>void}){
           <span className={'dv-evidence '+(table.rows.length?'available':'missing')}>{table.evidence_status}</span>
         </div>
       </div>
-      {table.rows.length
-        ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{table.columns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i}>{table.columns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
-        :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{table.columns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
+      {table.name==='CDP-LLDP Neighbors'&&table.rows.length
+        ?<NeighborTopology device={device} rows={table.rows}/>
+        :table.rows.length
+          ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{displayColumns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i}>{displayColumns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
+          :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{displayColumns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
     </section>
   </div>;
 }
