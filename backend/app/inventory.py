@@ -208,7 +208,7 @@ def inventory_devices(q:str="",site:str|None=None,city:str|None=None,zone:str|No
     stmt=select(InventoryDevice).join(Site).join(Zone).join(InventoryDeviceType)
     if q: stmt=stmt.where(or_(InventoryDevice.generated_name.ilike(f"%{q}%"),InventoryDevice.management_ip.ilike(f"%{q}%")))
     for value,column in [(site,Site.site_code),(city,Site.city),(zone,Zone.zone_code),(device_type,InventoryDeviceType.type_code),(role,InventoryDevice.role),(model,InventoryDevice.model),(match_status,InventoryDevice.logicmonitor_match_status),(criticality,InventoryDevice.criticality),(enabled,InventoryDevice.enabled)]:
-        if value is not None: stmt=stmt.where(column==value)
+        if value not in (None, ""): stmt=stmt.where(column==value)
     sort_map={"generated_name":InventoryDevice.generated_name,"site":Site.site_code,"city":Site.city,"zone":Zone.zone_code,"device_type":InventoryDeviceType.type_code,"model":InventoryDevice.model,"last_synchronized":InventoryDevice.last_logicmonitor_sync}
     stmt=stmt.order_by((sort_map.get(sort,InventoryDevice.generated_name).desc() if direction=="desc" else sort_map.get(sort,InventoryDevice.generated_name).asc()))
     all_rows=db.scalars(stmt).all();start=(page-1)*page_size
