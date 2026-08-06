@@ -1,0 +1,10 @@
+.env
+secrets/
+*.db
+__pycache__/
+.pytest_cache/
+.venv/
+node_modules/
+dist/
+reports/*.xlsx
+data/uploads/

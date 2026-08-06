@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16.9-alpine3.22
+    environment:
+      POSTGRES_DB: network_sla
+      POSTGRES_USER: network_sla
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-development-only-change-me}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U network_sla"], interval: 10s, timeout: 5s, retries: 5}
+    networks: [internal]
+  api:
+    image: medline-enterprise-network-sla-api:1.0.0
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://network_sla:${POSTGRES_PASSWORD:-development-only-change-me}@postgres:5432/network_sla
+      LM_PORTAL_URL: ${LM_PORTAL_URL:-}
+      LM_ACCESS_ID_FILE: ${LM_ACCESS_ID_FILE:-}
+      LM_ACCESS_KEY_FILE: ${LM_ACCESS_KEY_FILE:-}
+      LOCAL_ADMIN_PASSWORD: ${LOCAL_ADMIN_PASSWORD:-change-this-development-password}
+      LOCAL_USER_PASSWORD: ${LOCAL_USER_PASSWORD:-change-this-viewer-password}
+      JWT_SECRET: ${JWT_SECRET:-change-this-signing-secret}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+    volumes: [report_data:/reports, upload_data:/data]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+  frontend:
+    image: medline-enterprise-network-sla-web:1.0.0
+    build: ./frontend
+    ports: ["8080:8080"]
+    depends_on: {api: {condition: service_healthy}}
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    security_opt: [no-new-privileges:true]
+volumes: {postgres_data: {}, report_data: {}, upload_data: {}}
+networks: {internal: {}}

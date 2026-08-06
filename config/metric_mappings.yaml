@@ -1,0 +1,12 @@
+version: 1
+mappings:
+  availability: {datasources: [Ping, HostStatus], datapoints: [Status, availability], required: true}
+  packet_loss: {datasources: [Ping], datapoints: [PercentLoss, packetLoss], required: true}
+  latency: {datasources: [Ping], datapoints: [rtt, roundTripTime], required: true}
+  cpu: {datasources: [Cisco_CPU, CPU], datapoints: [usage, utilization], required: false}
+  memory: {datasources: [Cisco_Memory, Memory], datapoints: [usagePercent, utilization], required: false}
+  ap_clients: {models: ['(?i).*C?91(20|30).*'], datasources: [Cisco_WLC_AP, Cisco_AP], datapoints: [clientCount, clients], required: false}
+  ap_radio_utilization: {models: ['(?i).*C?91(20|30).*'], datasources: [Cisco_AP_Radio], datapoints: [channelUtilization, utilization], required: false}
+  ap_channel: {models: ['(?i).*C?91(20|30).*'], datasources: [Cisco_AP_Radio], datapoints: [channel], required: false}
+  ap_noise: {models: ['(?i).*C?91(20|30).*'], datasources: [Cisco_AP_Radio], datapoints: [noiseFloor, noise], required: false}
+

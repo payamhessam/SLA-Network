@@ -1,0 +1,19 @@
+services:
+  postgres:
+    restart: unless-stopped
+  api:
+    restart: unless-stopped
+    environment:
+      LOCAL_ADMIN_PASSWORD_FILE: /run/secrets/local_admin_password
+      LOCAL_USER_PASSWORD_FILE: /run/secrets/local_user_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      LM_ACCESS_ID_FILE: /run/secrets/lm_access_id
+      LM_ACCESS_KEY_FILE: /run/secrets/lm_access_key
+    secrets: [local_admin_password, local_user_password, jwt_secret, lm_access_id, lm_access_key]
+  frontend: {restart: unless-stopped}
+secrets:
+  local_admin_password: {file: ./secrets/local_admin_password.txt}
+  local_user_password: {file: ./secrets/local_user_password.txt}
+  jwt_secret: {file: ./secrets/jwt_secret.txt}
+  lm_access_id: {file: ./secrets/lm_access_id.txt}
+  lm_access_key: {file: ./secrets/lm_access_key.txt}
