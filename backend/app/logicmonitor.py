@@ -1,7 +1,34 @@
-import base64, hashlib, hmac, time
+import asyncio, base64, hashlib, hmac, time
 from urllib.parse import urlencode
 import httpx
 from .config import get_settings
+
+_clients: dict[str, httpx.AsyncClient] = {}
+_clients_lock = asyncio.Lock()
+
+
+async def _shared_client(base_url: str) -> httpx.AsyncClient:
+    """One pooled, keep-alive client per portal so we don't pay a TLS handshake per request."""
+    client = _clients.get(base_url)
+    if client is None:
+        async with _clients_lock:
+            client = _clients.get(base_url)
+            if client is None:
+                client = httpx.AsyncClient(base_url=base_url, verify=True, timeout=httpx.Timeout(30.0, connect=15.0),
+                                           limits=httpx.Limits(max_connections=24, max_keepalive_connections=24, keepalive_expiry=60.0))
+                _clients[base_url] = client
+    return client
+
+
+def _retry_after(response: httpx.Response, default: float = 5.0) -> float:
+    for header in ("Retry-After", "X-Rate-Limit-Window"):
+        value = response.headers.get(header)
+        if value:
+            try:
+                return min(60.0, max(1.0, float(value)))
+            except ValueError:
+                pass
+    return default
 
 
 class LogicMonitorClient:
@@ -17,10 +44,28 @@ class LogicMonitorClient:
 
     async def get(self, resource: str, params: dict | None = None):
         if not resource.startswith("/santaba/rest/"): raise ValueError("Unsupported LogicMonitor resource")
-        async with httpx.AsyncClient(base_url=self.settings.lm_portal_url, verify=True, timeout=30) as client:
-            response = await client.get(resource, params=params, headers=self._headers(resource))
+        client = await _shared_client(self.settings.lm_portal_url)
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                response = await client.get(resource, params=params, headers=self._headers(resource))
+            except (httpx.TimeoutException, httpx.TransportError):
+                if attempts <= 4:
+                    await asyncio.sleep(min(2 ** attempts, 15))
+                    continue
+                raise
+            if response.status_code == 429 and attempts <= 6:
+                await asyncio.sleep(_retry_after(response))
+                continue
+            if response.status_code in (500, 502, 503, 504) and attempts <= 4:
+                await asyncio.sleep(min(2 ** attempts, 15))
+                continue
             response.raise_for_status()
             payload = response.json()
+            if isinstance(payload, dict) and payload.get("status") == 429 and attempts <= 6:
+                await asyncio.sleep(_retry_after(response))
+                continue
             if isinstance(payload, dict) and payload.get("status") not in (None, 200):
                 raise httpx.HTTPStatusError("LogicMonitor rejected the read-only request", request=response.request, response=response)
             return payload

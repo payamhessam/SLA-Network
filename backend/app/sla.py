@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 LOSS_DATAPOINT = "PingLossPercent"
 COVERAGE_MIN_SAMPLES = 2
+CONCURRENCY = 16  # global cap on in-flight LM requests during a backfill
+DEVICE_CONCURRENCY = 6  # cap on devices processed at once (each holds one DB session)
 _backfill_lock = asyncio.Lock()
 
 
@@ -114,10 +116,12 @@ def _upsert(db: Session, device_id: int, day: date, metrics: dict, source: str) 
     row.source = source
 
 
-async def backfill_device(db: Session, device: Device, start: date, end: date, force: bool = False) -> dict:
-    """Fill SlaDaily for [start, end] (inclusive) for one mapped device."""
+async def backfill_device(device: Device, start: date, end: date, force: bool = False, sem: asyncio.Semaphore | None = None) -> dict:
+    """Fill SlaDaily for [start, end] (inclusive) for one mapped device, using its own DB session.
+    `sem` (shared across devices) caps total in-flight LM requests."""
     if not device.lm_device_id:
         return {"device": device.hostname, "status": "unmapped", "written": 0}
+    sem = sem or asyncio.Semaphore(12)
     client = LogicMonitorClient()
     discovery = await ping_instance(client, device.lm_device_id)
     if not discovery:
@@ -126,11 +130,6 @@ async def backfill_device(db: Session, device: Device, start: date, end: date, f
     settings = get_settings()
     threshold = settings.coverage_threshold
     chunk = max(1, settings.sla_query_hours) * 3600  # keep each request under LM's per-call point cap
-    existing = {r.day: r for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id == device.id, SlaDaily.day >= start, SlaDaily.day <= end)).all()}
-    days = [start + timedelta(n) for n in range((end - start).days + 1)]
-    pending = [d for d in days if force or not (existing.get(d) and existing[d].coverage >= threshold)]
-    pending.sort(reverse=True)  # recent-first so WTD/MTD windows become valid quickly
-    sem = asyncio.Semaphore(8)
 
     async def day_metrics(day: date):
         s0, e0 = day_bounds_epoch(day)
@@ -157,11 +156,16 @@ async def backfill_device(db: Session, device: Device, start: date, end: date, f
         return day, {"expected_minutes": expected, "observed_minutes": observed, "up_minutes": up_minutes, "availability": availability, "coverage": coverage}
 
     written = 0
-    for i in range(0, len(pending), 12):  # commit every ~12 days so progress is visible incrementally
-        for day, metrics in await asyncio.gather(*(day_metrics(d) for d in pending[i:i + 12])):
-            _upsert(db, device.id, day, metrics, settings.availability_source)
-            written += 1
-        db.commit()
+    with SessionLocal() as db:
+        existing = {r.day: r for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id == device.id, SlaDaily.day >= start, SlaDaily.day <= end)).all()}
+        days = [start + timedelta(n) for n in range((end - start).days + 1)]
+        pending = [d for d in days if force or not (existing.get(d) and existing[d].coverage >= threshold)]
+        pending.sort(reverse=True)  # recent-first so WTD/MTD windows become valid quickly
+        for i in range(0, len(pending), 12):  # commit every ~12 days so progress is visible incrementally
+            for day, metrics in await asyncio.gather(*(day_metrics(d) for d in pending[i:i + 12])):
+                _upsert(db, device.id, day, metrics, settings.availability_source)
+                written += 1
+            db.commit()
     return {"device": device.hostname, "status": "ok", "written": written, "days": len(days)}
 
 
@@ -175,26 +179,29 @@ async def backfill_all(start: date | None = None, end: date | None = None, force
         start = start or backfill_start()
         end = end or today_local()
         recent_start = max(start, end - timedelta(days=35))
-        results = {}
+        sem = asyncio.Semaphore(CONCURRENCY)
+        device_sem = asyncio.Semaphore(DEVICE_CONCURRENCY)
         with SessionLocal() as db:
             devices = monitored_devices(db)
-            # Pass 1: recent weeks for every device first, so WTD/MTD light up fleet-wide within minutes.
-            if recent_start > start:
-                for device in devices:
-                    try:
-                        await backfill_device(db, device, recent_start, end, force)
-                    except Exception as exc:
-                        db.rollback()
-                        logger.warning("SLA recent backfill failed for %s (%s)", device.hostname, type(exc).__name__)
-            # Pass 2: full history back to the start (fills YTD); recent good days are skipped when force is False.
-            for device in devices:
-                try:
-                    results[device.hostname] = await backfill_device(db, device, start, end, force)
-                except Exception as exc:
-                    db.rollback()
-                    logger.warning("SLA backfill failed for %s (%s)", device.hostname, type(exc).__name__)
-                    results[device.hostname] = {"device": device.hostname, "status": f"error:{type(exc).__name__}", "written": 0}
-        return {"start": start.isoformat(), "end": end.isoformat(), "devices": len(results), "results": list(results.values())}
+            [(d.id, d.lm_device_id, d.hostname, d.device_type) for d in devices]  # force-load before the session closes
+
+        async def run(device, window_start):
+            async with device_sem:  # bound concurrent DB sessions so the pool is not exhausted
+                return await backfill_device(device, window_start, end, force, sem)
+
+        # Pass 1: recent weeks for every device, so WTD/MTD light up fleet-wide within a minute or two.
+        if recent_start > start:
+            await asyncio.gather(*(run(d, recent_start) for d in devices), return_exceptions=True)
+        # Pass 2: full history back to the start (fills YTD); recent good days are skipped when force is False.
+        outcomes = await asyncio.gather(*(run(d, start) for d in devices), return_exceptions=True)
+        results = []
+        for device, outcome in zip(devices, outcomes):
+            if isinstance(outcome, dict):
+                results.append(outcome)
+            else:
+                logger.warning("SLA backfill failed for %s (%s)", device.hostname, type(outcome).__name__)
+                results.append({"device": device.hostname, "status": f"error:{type(outcome).__name__}", "written": 0})
+        return {"start": start.isoformat(), "end": end.isoformat(), "devices": len(results), "results": results}
 
 
 async def refresh_recent(days_back: int = 1) -> dict:

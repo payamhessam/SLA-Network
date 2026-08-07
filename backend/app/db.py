@@ -203,7 +203,7 @@ class ResilienceAssessment(Base):
 
 
 database_url = get_settings().database_url
-engine = create_engine(database_url, pool_pre_ping=True, **({"connect_args":{"check_same_thread":False},"poolclass":StaticPool} if database_url.startswith("sqlite") else {}))
+engine = create_engine(database_url, pool_pre_ping=True, **({"connect_args":{"check_same_thread":False},"poolclass":StaticPool} if database_url.startswith("sqlite") else {"pool_size":12,"max_overflow":24,"pool_timeout":30}))
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
