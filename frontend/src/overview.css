@@ -8,7 +8,7 @@
   --ov-ok-bg:var(--ds-ok-bg); --ov-warn-bg:var(--ds-warn-bg); --ov-crit-bg:var(--ds-crit-bg); --ov-info-bg:var(--ds-info-bg);
   --ov-sans:var(--ds-sans);
   --ov-mono:var(--ds-mono);
-  max-width:1440px;margin:0 auto;font-family:var(--ov-sans);color:var(--ov-on);
+  max-width:none;margin:0;font-family:var(--ov-sans);color:var(--ov-on);
 }
 
 /* Exec header */
