@@ -28,7 +28,7 @@ from .db import AuditEvent, WanRouter, SessionLocal, session
 from .logicmonitor import LogicMonitorClient
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/wan", tags=["wan"])
+router = APIRouter(prefix="/api/v1/wan", tags=["wan"])
 _refresh_lock = asyncio.Lock()
 
 # BGP finite-state-machine peer states (RFC 4271 order used by the SNMP MIB).
