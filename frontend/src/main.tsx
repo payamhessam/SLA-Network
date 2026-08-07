@@ -35,11 +35,11 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
   const nb=rows.map(parse);
   const groups=new Map<string,{name:string,links:any[]}>();
   nb.forEach(n=>{const k=n.name.toLowerCase();const g=groups.get(k)||{name:n.name,links:[]};g.links.push(n);groups.set(k,g)});
-  const nodes=[...groups.values()];
-  const anyDual=nodes.some(g=>g.links.length>1);
+  const nodes=[...groups.values()].map(g=>{const seen=new Set<string>();const ulinks:any[]=[];g.links.forEach(l=>{const key=(l.local||'?')+'|'+(l.remote||'?');if(seen.has(key))return;seen.add(key);ulinks.push(l)});return{name:g.name,ulinks}});
+  const anyDual=nodes.some(g=>g.ulinks.length>1);
   const kind=(name:string)=>/wap|(?:^|[-_])ap(?:[-_]|$)/i.test(name)?'ap':/dsw|asw|sw|switch|rtr|router/i.test(name)?'sw':'dev';
-  const nodeColor=(g:{links:any[]})=>g.links.length>1?P.dual:(g.links[0].protocol==='CDP'?P.cdp:P.lldp);
-  const linkColor=(g:{links:any[]},lk:any)=>g.links.length>1?P.dual:(lk.protocol==='CDP'?P.cdp:P.lldp);
+  const nodeColor=(g:{ulinks:any[]})=>g.ulinks.length>1?P.dual:(g.ulinks[0].protocol==='CDP'?P.cdp:P.lldp);
+  const linkColor=(g:{ulinks:any[]},lk:any)=>g.ulinks.length>1?P.dual:(lk.protocol==='CDP'?P.cdp:P.lldp);
   const N=nodes.length;
   const R=Math.max(170,Math.min(150+N*13,380));
   const nodeR=22,centerR=32;
@@ -61,7 +61,7 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
   const onDown=(e:React.MouseEvent)=>{drag.current={sx:e.clientX,sy:e.clientY,ox:boxRef.current.x,oy:boxRef.current.y}};
   const onMove=(e:React.MouseEvent)=>{if(!drag.current)return;const svg=svgRef.current!;const r=svg.getBoundingClientRect();const b=boxRef.current;const s=Math.min(r.width/b.w,r.height/b.h)||1;setBox({x:drag.current.ox-(e.clientX-drag.current.sx)/s,y:drag.current.oy-(e.clientY-drag.current.sy)/s,w:b.w,h:b.h})};
   const onUp=()=>{drag.current=null};
-  const total=nb.length;
+  const total=nodes.reduce((a,g)=>a+g.ulinks.length,0);
   return <div className="dv-topo" style={{background:P.canvas,backgroundImage:`linear-gradient(${P.grid} 1px,transparent 1px),linear-gradient(90deg,${P.grid} 1px,transparent 1px)`,backgroundSize:'24px 24px'}}>
     <div className="dv-topo-legend">
       <div className="dv-topo-title">{device.hostname}</div>
@@ -76,9 +76,9 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
       <button onClick={reset} aria-label="Reset view" title="Reset view">⤢</button>
     </div>
     <svg ref={svgRef} className="dv-topo-svg" viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} style={{cursor:'grab'}} role="img" aria-label={`CDP and LLDP neighbor topology for ${device.hostname}`}>
-      {nodes.map((g,i)=>{const{x,y}=pos(i);const dist=Math.hypot(x,y)||1;const px=-y/dist,py=x/dist;const L=g.links.length;return <g key={'e'+i}>{g.links.map((lk,j)=>{const off=L>1?(j-(L-1)/2)*18:0;const cxp=x/2+px*off*2.2,cyp=y/2+py*off*2.2;return <path key={j} d={`M0 0 Q ${cxp.toFixed(1)} ${cyp.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}`} fill="none" stroke={linkColor(g,lk)} strokeWidth={L>1?2.4:2} strokeOpacity={0.65} strokeDasharray={lk.protocol==='CDP'?'6 5':undefined}/>})}</g>})}
-      {nodes.map((g,i)=>{const{x,y}=pos(i);const lines:[string,string][]=[];g.links.forEach(lk=>{const lp=abbrevPort(lk.local),rp=abbrevPort(lk.remote);if(lp)lines.push([lp,P.text]);if(rp)lines.push(['→ '+rp,P.dim])});if(!lines.length)return null;const cw=Math.max(...lines.map(l=>l[0].length))*6.2+12,ch=lines.length*11+7;const cx=x*0.52,cy=y*0.52;return <g key={'p'+i}><rect x={cx-cw/2} y={cy-ch/2} width={cw} height={ch} rx={3} fill={P.chip} stroke={g.links.length>1?P.dual:P.chipStroke}/>{lines.map((l,li)=><text key={li} x={cx} y={cy-ch/2+12+li*11} textAnchor="middle" fontFamily={F} fontSize={9} fill={l[1]}>{l[0]}</text>)}</g>})}
-      {nodes.map((g,i)=>{const{a,x,y}=pos(i);const c=nodeColor(g);const cosA=Math.cos(a);const anchor:'start'|'end'|'middle'=cosA>0.25?'start':cosA<-0.25?'end':'middle';const lr=R+nodeR+10;const lx=lr*cosA,ly=lr*Math.sin(a);const w=labelW(g.name);const rx=anchor==='start'?lx-6:anchor==='end'?lx-w+6:lx-w/2;return <g key={'n'+i}><circle cx={x} cy={y} r={nodeR} fill={P.node} stroke={c} strokeWidth={g.links.length>1?2.7:2}/>{nodeGlyph(kind(g.name),x,y,c)}<title>{`${g.name} · ${g.links.length} link${g.links.length===1?'':'s'}`+g.links.map(lk=>`\n  ${lk.local||'?'} → ${lk.remote||'?'} (${lk.protocol})`).join('')}</title><rect x={rx} y={ly-9} width={w} height={18} rx={4} fill={P.nameFill} stroke={g.links.length>1?P.dual:P.nameStroke}/><text x={lx} y={ly+4} textAnchor={anchor} fontFamily={F} fontSize={10} fill={P.text}>{g.name}</text></g>})}
+      {nodes.map((g,i)=>{const{x,y}=pos(i);const dist=Math.hypot(x,y)||1;const px=-y/dist,py=x/dist;const L=g.ulinks.length;return <g key={'e'+i}>{g.ulinks.map((lk,j)=>{const off=L>1?(j-(L-1)/2)*18:0;const cxp=x/2+px*off*2.2,cyp=y/2+py*off*2.2;return <path key={j} d={`M0 0 Q ${cxp.toFixed(1)} ${cyp.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}`} fill="none" stroke={linkColor(g,lk)} strokeWidth={L>1?2.4:2} strokeOpacity={0.65} strokeDasharray={lk.protocol==='CDP'?'6 5':undefined}/>})}</g>})}
+      {nodes.map((g,i)=>{const{x,y}=pos(i);const lines=g.ulinks.map(lk=>abbrevPort(lk.local)||'(no port)');if(!lines.length)return null;const cw=Math.max(...lines.map(l=>l.length))*6.2+12,ch=lines.length*11+7;const cx=x*0.52,cy=y*0.52;return <g key={'p'+i}><rect x={cx-cw/2} y={cy-ch/2} width={cw} height={ch} rx={3} fill={P.chip} stroke={g.ulinks.length>1?P.dual:P.chipStroke}/>{lines.map((l,li)=><text key={li} x={cx} y={cy-ch/2+12+li*11} textAnchor="middle" fontFamily={F} fontSize={9} fill={P.text}>{l}</text>)}</g>})}
+      {nodes.map((g,i)=>{const{a,x,y}=pos(i);const c=nodeColor(g);const cosA=Math.cos(a);const anchor:'start'|'end'|'middle'=cosA>0.25?'start':cosA<-0.25?'end':'middle';const lr=R+nodeR+10;const lx=lr*cosA,ly=lr*Math.sin(a);const w=labelW(g.name);const rx=anchor==='start'?lx-6:anchor==='end'?lx-w+6:lx-w/2;const dual=g.ulinks.length>1;return <g key={'n'+i}><circle cx={x} cy={y} r={nodeR} fill={P.node} stroke={c} strokeWidth={dual?2.7:2}/>{nodeGlyph(kind(g.name),x,y,c)}<title>{`${g.name} · ${g.ulinks.length} link${g.ulinks.length===1?'':'s'}`+g.ulinks.map(lk=>`\n  ${lk.local||'?'} (${lk.protocol})`).join('')}</title><rect x={rx} y={ly-9} width={w} height={18} rx={4} fill={P.nameFill} stroke={dual?P.dual:P.nameStroke}/><text x={lx} y={ly+4} textAnchor={anchor} fontFamily={F} fontSize={10} fill={P.text}>{g.name}</text></g>})}
       <circle cx={0} cy={0} r={centerR} fill={P.centerFill} stroke={P.centerStroke} strokeWidth={2.5}/>
       {nodeGlyph('sw',0,0,P.centerStroke,1.25)}
       <rect x={-labelW(device.hostname)/2} y={centerR+6} width={labelW(device.hostname)} height={20} rx={4} fill={P.labelBg} stroke={P.labelStroke}/>
