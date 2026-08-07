@@ -9,8 +9,9 @@
  * / neighbours). Only administrators can add or remove routers. Data: /wan/*.
  */
 import React,{useEffect,useMemo,useState}from'react';
-import{Globe,MapPin,Plus,RefreshCw,Router as RouterIcon,Search,ShieldAlert,Trash2,X}from'lucide-react';
+import{Globe,LayoutGrid,List,MapPin,Plus,RefreshCw,Router as RouterIcon,Search,ShieldAlert,Trash2,X}from'lucide-react';
 import Help from'./Help';
+import{usePager,Pager}from'./Paged';
 import'./overview.css';
 
 type Props={token:string;administrator:boolean};
@@ -24,6 +25,7 @@ export default function WanProviders({token,administrator}:Props){
   const[detail,setDetail]=useState<any>(null);const[tab,setTab]=useState('BGP Peers');
   const[adding,setAdding]=useState(false);const[q,setQ]=useState('');const[found,setFound]=useState<any[]>([]);const[searching,setSearching]=useState(false);
   const[sites,setSites]=useState<any[]>([]);const[edit,setEdit]=useState<any|null>(null);
+  const[view,setView]=useState<'table'|'cards'>('table');const pg=usePager(rows);
   const request=async(path:string,options:RequestInit={})=>{const r=await fetch('/api/v1'+path,{...options,headers:{Authorization:`Bearer ${token}`,...(options.body?{'Content-Type':'application/json'}:{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Request failed');return r.status===204?null:r.json()};
   const load=async()=>{setError('');try{const[o,l]=await Promise.all([request('/wan/overview'),request('/wan/routers')]);setOv(o);setRows(l.items)}catch(x:any){setError(x.message)}request('/settings/sites').then(s=>setSites(s||[])).catch(()=>{})};
   const saveLocation=async()=>{if(!edit)return;setBusy(true);try{await request(`/wan/routers/${edit.id}/location`,{method:'PATCH',body:JSON.stringify({city:edit.city,province:edit.province})});setEdit(null);await load()}catch(x:any){setError(x.message)}finally{setBusy(false)}};
@@ -62,9 +64,11 @@ export default function WanProviders({token,administrator}:Props){
       <div className="ov-bu">{(ov?.providers||[]).map((p:any,i:number)=><div key={i} className="ov-bu-card"><div className="ov-bu-top"><h3 style={{fontSize:15}}>{p.provider}</h3><span className="ov-badge unknown">{p.routers} rtr</span></div>
         <div className="ov-bu-stats" style={{gridTemplateColumns:'repeat(3,1fr)',borderTop:0,paddingTop:0}}><div><span>Healthy</span><b>{p.healthy}/{p.routers}</b></div><div><span>BGP est.</span><b>{p.bgp}</b></div><div><span>OSPF full</span><b>{p.ospf}</b></div></div></div>)}</div></div>
 
-    <div className="ov-panel"><div className="ov-panel-head"><h2><RouterIcon size={15}/> Provider Routers<Help text="Every WAN provider router with live read-only state: status, 24h reachability, established BGP peers, full OSPF adjacencies, and up interfaces. Open a router for full routing detail. Admins can add or remove routers."/></h2><span className="tag">{rows.length} routers</span></div>
+    <div className="ov-panel"><div className="ov-panel-head"><h2><RouterIcon size={15}/> Provider Routers<Help text="Every WAN provider router with live read-only state: status, 24h reachability, established BGP peers, full OSPF adjacencies, and up interfaces. Switch between table and card views, and open a router for full routing detail. Admins can add or remove routers."/></h2>
+      <div style={{display:'flex',alignItems:'center',gap:12}}><div className="ds-viewtoggle"><button type="button" className={view==='table'?'active':''} onClick={()=>setView('table')}><List size={14}/> Table</button><button type="button" className={view==='cards'?'active':''} onClick={()=>setView('cards')}><LayoutGrid size={14}/> Cards</button></div><span className="tag">{rows.length} routers</span></div></div>
+      {rows.length===0?<div className="ds-empty"><RouterIcon size={26}/><div>No WAN routers yet.{administrator?' Use “Add router” to import one from LogicMonitor.':''}</div></div>:view==='table'?
       <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Router','Provider / Circuit','Site','City / State','Status','Reach 24h','BGP','OSPF','Interfaces','Last sync',''].map(h=><th key={h}>{h}</th>)}</tr></thead>
-        <tbody>{rows.map(r=><tr key={r.id}>
+        <tbody>{pg.slice.map((r:any)=><tr key={r.id}>
           <td><a style={{color:'var(--ov-primary)',cursor:'pointer',fontWeight:600}} onClick={()=>openDetail(r.id)}>{r.display_name}</a></td>
           <td>{r.provider||'—'}</td><td>{r.site_label||'—'}</td>
           <td>{r.city?`${r.city}${r.province?', '+r.province:''}`:<span className="muted">—</span>}{administrator&&<button title="Set city/state" onClick={()=>setEdit({id:r.id,display_name:r.display_name,city:r.city||'',province:r.province||''})} style={{background:'none',border:0,color:'var(--ov-faint)',cursor:'pointer',marginLeft:6,verticalAlign:'middle'}}><MapPin size={13}/></button>}</td>
@@ -75,7 +79,14 @@ export default function WanProviders({token,administrator}:Props){
           <td className="mono">{r.interfaces!=null?`${r.interfaces_up??0}/${r.interfaces}`:'—'}</td>
           <td className="mono" style={{color:'var(--ov-faint)'}}>{r.last_sync?new Date(r.last_sync).toLocaleString():'—'}</td>
           <td style={{whiteSpace:'nowrap'}}><button className="ov-export" style={{padding:'4px 8px'}} onClick={()=>openDetail(r.id)}>Detail</button>{administrator&&<button className="ov-export" style={{padding:'4px 8px',marginLeft:6}} onClick={()=>remove(r)} disabled={busy} title="Remove"><Trash2 size={13}/></button>}</td>
-        </tr>)}{rows.length===0&&<tr><td colSpan={11} style={{textAlign:'center',color:'var(--ov-dim)',padding:20}}>No WAN routers yet.{administrator?' Use “Add router” to import one from LogicMonitor.':''}</td></tr>}</tbody></table></div></div>
+        </tr>)}</tbody></table></div>
+      :<div className="ov-bu" style={{padding:18}}>{pg.slice.map((r:any)=><div key={r.id} className="ov-bu-card">
+        <div className="ov-bu-top"><h3 style={{fontSize:14}}><a style={{color:'var(--ov-primary)',cursor:'pointer'}} onClick={()=>openDetail(r.id)}>{r.display_name}</a></h3><span className={'ov-badge '+badge(r.status)}>{(r.status||'Unknown').toUpperCase()}</span></div>
+        <div className="ov-sub" style={{fontSize:12}}>{r.provider||'—'}{r.city?` · ${r.city}${r.province?', '+r.province:''}`:''}</div>
+        <div className="ov-bu-stats"><div><span>Reach 24h</span><b>{reach(r.reachability)}</b></div><div><span>BGP</span><b>{r.bgp_peers!=null?`${r.bgp_established??0}/${r.bgp_peers}`:'—'}</b></div><div><span>OSPF</span><b>{r.ospf_full??'—'}</b></div><div><span>Interfaces</span><b>{r.interfaces!=null?`${r.interfaces_up??0}/${r.interfaces}`:'—'}</b></div></div>
+        <div style={{display:'flex',gap:6,marginTop:4}}><button className="ov-export" style={{padding:'5px 10px'}} onClick={()=>openDetail(r.id)}>Detail</button>{administrator&&<button className="ov-export" style={{padding:'5px 10px'}} onClick={()=>remove(r)} disabled={busy}><Trash2 size={13}/> Remove</button>}</div>
+      </div>)}</div>}
+      {rows.length>0&&<Pager {...pg} label="routers"/>}</div>
 
     {edit&&<div onClick={()=>setEdit(null)} style={{position:'fixed',inset:0,background:'rgba(4,12,20,.55)',display:'grid',placeItems:'center',zIndex:80}}>
       <div onClick={e=>e.stopPropagation()} style={{background:'var(--ov-surface)',border:'1px solid var(--ov-line)',borderRadius:10,padding:22,width:'min(460px,92vw)',color:'var(--ov-on)'}}>
