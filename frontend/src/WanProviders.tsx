@@ -9,7 +9,7 @@
  * / neighbours). Only administrators can add or remove routers. Data: /wan/*.
  */
 import React,{useEffect,useMemo,useState}from'react';
-import{Activity,ArrowLeft,Globe,Plus,RefreshCw,Router as RouterIcon,Search,ShieldAlert,Trash2,X}from'lucide-react';
+import{Globe,MapPin,Plus,RefreshCw,Router as RouterIcon,Search,ShieldAlert,Trash2,X}from'lucide-react';
 import Help from'./Help';
 import'./overview.css';
 
@@ -23,8 +23,10 @@ export default function WanProviders({token,administrator}:Props){
   const[error,setError]=useState('');const[busy,setBusy]=useState(false);
   const[detail,setDetail]=useState<any>(null);const[tab,setTab]=useState('BGP Peers');
   const[adding,setAdding]=useState(false);const[q,setQ]=useState('');const[found,setFound]=useState<any[]>([]);const[searching,setSearching]=useState(false);
+  const[sites,setSites]=useState<any[]>([]);const[edit,setEdit]=useState<any|null>(null);
   const request=async(path:string,options:RequestInit={})=>{const r=await fetch('/api/v1'+path,{...options,headers:{Authorization:`Bearer ${token}`,...(options.body?{'Content-Type':'application/json'}:{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Request failed');return r.status===204?null:r.json()};
-  const load=async()=>{setError('');try{const[o,l]=await Promise.all([request('/wan/overview'),request('/wan/routers')]);setOv(o);setRows(l.items)}catch(x:any){setError(x.message)}};
+  const load=async()=>{setError('');try{const[o,l]=await Promise.all([request('/wan/overview'),request('/wan/routers')]);setOv(o);setRows(l.items)}catch(x:any){setError(x.message)}request('/settings/sites').then(s=>setSites(s||[])).catch(()=>{})};
+  const saveLocation=async()=>{if(!edit)return;setBusy(true);try{await request(`/wan/routers/${edit.id}/location`,{method:'PATCH',body:JSON.stringify({city:edit.city,province:edit.province})});setEdit(null);await load()}catch(x:any){setError(x.message)}finally{setBusy(false)}};
   useEffect(()=>{load()},[]);
   const openDetail=async(id:number)=>{setBusy(true);try{setDetail(await request(`/wan/routers/${id}`));setTab('BGP Peers')}catch(x:any){setError(x.message)}finally{setBusy(false)}};
   const refreshOne=async(id:number)=>{setBusy(true);try{await request(`/wan/routers/${id}/refresh`,{method:'POST'});await load();if(detail?.id===id)setDetail(await request(`/wan/routers/${id}`))}catch(x:any){setError(x.message)}finally{setBusy(false)}};
@@ -61,10 +63,11 @@ export default function WanProviders({token,administrator}:Props){
         <div className="ov-bu-stats" style={{gridTemplateColumns:'repeat(3,1fr)',borderTop:0,paddingTop:0}}><div><span>Healthy</span><b>{p.healthy}/{p.routers}</b></div><div><span>BGP est.</span><b>{p.bgp}</b></div><div><span>OSPF full</span><b>{p.ospf}</b></div></div></div>)}</div></div>
 
     <div className="ov-panel"><div className="ov-panel-head"><h2><RouterIcon size={15}/> Provider Routers<Help text="Every WAN provider router with live read-only state: status, 24h reachability, established BGP peers, full OSPF adjacencies, and up interfaces. Open a router for full routing detail. Admins can add or remove routers."/></h2><span className="tag">{rows.length} routers</span></div>
-      <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Router','Provider / Circuit','Site','Status','Reach 24h','BGP','OSPF','Interfaces','Last sync',''].map(h=><th key={h}>{h}</th>)}</tr></thead>
+      <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Router','Provider / Circuit','Site','City / State','Status','Reach 24h','BGP','OSPF','Interfaces','Last sync',''].map(h=><th key={h}>{h}</th>)}</tr></thead>
         <tbody>{rows.map(r=><tr key={r.id}>
           <td><a style={{color:'var(--ov-primary)',cursor:'pointer',fontWeight:600}} onClick={()=>openDetail(r.id)}>{r.display_name}</a></td>
           <td>{r.provider||'—'}</td><td>{r.site_label||'—'}</td>
+          <td>{r.city?`${r.city}${r.province?', '+r.province:''}`:<span className="muted">—</span>}{administrator&&<button title="Set city/state" onClick={()=>setEdit({id:r.id,display_name:r.display_name,city:r.city||'',province:r.province||''})} style={{background:'none',border:0,color:'var(--ov-faint)',cursor:'pointer',marginLeft:6,verticalAlign:'middle'}}><MapPin size={13}/></button>}</td>
           <td><span className={'ov-badge '+badge(r.status)}>{(r.status||'Unknown').toUpperCase()}</span></td>
           <td className="mono">{reach(r.reachability)}</td>
           <td className="mono">{r.bgp_peers!=null?`${r.bgp_established??0}/${r.bgp_peers}`:'—'}</td>
@@ -72,7 +75,28 @@ export default function WanProviders({token,administrator}:Props){
           <td className="mono">{r.interfaces!=null?`${r.interfaces_up??0}/${r.interfaces}`:'—'}</td>
           <td className="mono" style={{color:'var(--ov-faint)'}}>{r.last_sync?new Date(r.last_sync).toLocaleString():'—'}</td>
           <td style={{whiteSpace:'nowrap'}}><button className="ov-export" style={{padding:'4px 8px'}} onClick={()=>openDetail(r.id)}>Detail</button>{administrator&&<button className="ov-export" style={{padding:'4px 8px',marginLeft:6}} onClick={()=>remove(r)} disabled={busy} title="Remove"><Trash2 size={13}/></button>}</td>
-        </tr>)}{rows.length===0&&<tr><td colSpan={10} style={{textAlign:'center',color:'var(--ov-dim)',padding:20}}>No WAN routers yet.{administrator?' Use “Add router” to import one from LogicMonitor.':''}</td></tr>}</tbody></table></div></div>
+        </tr>)}{rows.length===0&&<tr><td colSpan={11} style={{textAlign:'center',color:'var(--ov-dim)',padding:20}}>No WAN routers yet.{administrator?' Use “Add router” to import one from LogicMonitor.':''}</td></tr>}</tbody></table></div></div>
+
+    {edit&&<div onClick={()=>setEdit(null)} style={{position:'fixed',inset:0,background:'rgba(4,12,20,.55)',display:'grid',placeItems:'center',zIndex:80}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'var(--ov-surface)',border:'1px solid var(--ov-line)',borderRadius:10,padding:22,width:'min(460px,92vw)',color:'var(--ov-on)'}}>
+        <h2 style={{margin:'0 0 4px',fontSize:17}}>Set city / state</h2>
+        <p style={{margin:'0 0 16px',color:'var(--ov-dim)',fontSize:13}}>{edit.display_name}</p>
+        <label style={{fontFamily:'var(--ov-mono)',fontSize:11,textTransform:'uppercase',letterSpacing:'.05em',color:'var(--ov-faint)'}}>Pick a Medline branch (auto-fills)</label>
+        <select value="" onChange={e=>{const s=sites.find(x=>String(x.id)===e.target.value);if(s)setEdit({...edit,city:s.city||'',province:s.province_region||''})}} style={{width:'100%',margin:'6px 0 14px',padding:'9px 10px',background:'var(--ov-surface-low)',border:'1px solid var(--ov-line)',borderRadius:6,color:'var(--ov-on)',fontSize:13}}>
+          <option value="">— Select a CA branch to auto-fill —</option>
+          {sites.map(s=><option key={s.id} value={s.id}>{s.site_code} — {s.city}{s.province_region?', '+s.province_region:''}</option>)}
+        </select>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div><label style={{fontFamily:'var(--ov-mono)',fontSize:11,textTransform:'uppercase',letterSpacing:'.05em',color:'var(--ov-faint)'}}>City</label>
+            <input value={edit.city} onChange={e=>setEdit({...edit,city:e.target.value})} placeholder="e.g. Delta" style={{width:'100%',marginTop:6,padding:'9px 10px',background:'var(--ov-surface-low)',border:'1px solid var(--ov-line)',borderRadius:6,color:'var(--ov-on)',fontSize:13}}/></div>
+          <div><label style={{fontFamily:'var(--ov-mono)',fontSize:11,textTransform:'uppercase',letterSpacing:'.05em',color:'var(--ov-faint)'}}>State / Province</label>
+            <input value={edit.province} onChange={e=>setEdit({...edit,province:e.target.value})} placeholder="e.g. BC" style={{width:'100%',marginTop:6,padding:'9px 10px',background:'var(--ov-surface-low)',border:'1px solid var(--ov-line)',borderRadius:6,color:'var(--ov-on)',fontSize:13}}/></div>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',gap:10,marginTop:20}}>
+          <button className="ov-export" onClick={()=>setEdit(null)}>Cancel</button>
+          <button className="ov-export" style={{background:'var(--ov-primary)',color:'#04203b',borderColor:'var(--ov-primary)'}} onClick={saveLocation} disabled={busy}>{busy?'Saving…':'Save'}</button>
+        </div>
+      </div></div>}
   </div>;
 }
 
@@ -86,7 +110,7 @@ function WanDetail({d,back,tab,setTab,admin,busy,refresh}:{d:any;back:()=>void;t
   const cov=det.routing_coverage||[];
   const cols=useMemo(()=>rows.length?Object.keys(rows[0]):[],[rows]);
   return <div className="ov">
-    <div className="ov-exec"><div><div className="ov-eyebrow" style={{cursor:'pointer'}} onClick={back}>← WAN PROVIDERS</div><h1 className="ov-title" style={{fontSize:24}}>{d.display_name}</h1><div className="ov-sub">{d.provider} · {d.site_label} · {d.management_ip||'no IP'}</div></div>
+    <div className="ov-exec"><div><div className="ov-eyebrow" style={{cursor:'pointer'}} onClick={back}>← WAN PROVIDERS</div><h1 className="ov-title" style={{fontSize:24}}>{d.display_name}</h1><div className="ov-sub">{d.provider} · {d.site_label}{d.city?` · ${d.city}${d.province?', '+d.province:''}`:''} · {d.management_ip||'no IP'}</div></div>
       {admin&&<button className="ov-export" onClick={refresh} disabled={busy}><RefreshCw size={15}/> {busy?'Refreshing…':'Refresh'}</button>}</div>
 
     <div className="ov-kpis" style={{gridTemplateColumns:'repeat(5,1fr)'}}>

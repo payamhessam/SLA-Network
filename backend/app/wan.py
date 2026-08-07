@@ -271,9 +271,15 @@ class WanAdd(BaseModel):
     management_ip: str | None = Field(default=None, max_length=64)
 
 
+class WanLocation(BaseModel):
+    city: str = Field(default="", max_length=120)
+    province: str = Field(default="", max_length=80)
+
+
 def _row_json(r: WanRouter) -> dict:
     c = (r.details or {}).get("counts", {})
     return {"id": r.id, "display_name": r.display_name, "provider": r.provider, "site_label": r.site_label,
+            "city": r.city or "", "province": r.province or "",
             "management_ip": r.management_ip, "lm_device_id": r.lm_device_id, "match_status": r.match_status,
             "enabled": r.enabled, "status": r.status, "cpu": r.cpu, "memory": r.memory, "reachability": r.reachability,
             "uptime": r.uptime, "last_sync": r.last_sync.isoformat() if r.last_sync else None,
@@ -383,6 +389,20 @@ async def refresh_router(router_id: int, actor: dict = Depends(administrator), d
     async with _refresh_lock:
         await _refresh_one(db, r, actor.get("sub", "admin"))
         db.commit()
+    return _row_json(r)
+
+
+@router.patch("/routers/{router_id}/location")
+def set_location(router_id: int, body: WanLocation, actor: dict = Depends(administrator), db: Session = Depends(session)) -> dict:
+    """Admin-only: set the router's city/state. The UI can pre-fill these from a company
+    branch (site) or the admin can type them freehand."""
+    r = db.get(WanRouter, router_id)
+    if not r:
+        raise HTTPException(404, "WAN router not found")
+    r.city = body.city.strip()
+    r.province = body.province.strip()
+    db.add(AuditEvent(actor=actor.get("sub", "admin"), action="wan.location", target=f"wan_router:{router_id}", details={"city": r.city, "province": r.province}))
+    db.commit()
     return _row_json(r)
 
 

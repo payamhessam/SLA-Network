@@ -225,6 +225,8 @@ class WanRouter(Base):
     display_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     provider: Mapped[str] = mapped_column(String(120), default="")
     site_label: Mapped[str] = mapped_column(String(180), default="")
+    city: Mapped[str] = mapped_column(String(120), default="")
+    province: Mapped[str] = mapped_column(String(80), default="")
     management_ip: Mapped[str | None] = mapped_column(String(64))
     lm_device_id: Mapped[int | None] = mapped_column(Integer, unique=True)
     match_status: Mapped[str] = mapped_column(String(40), default="Pending")

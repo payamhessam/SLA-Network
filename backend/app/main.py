@@ -49,6 +49,8 @@ async def startup():
             for column, ddl in (("status", "varchar(20) DEFAULT 'Offline'"), ("last_seen", "timestamptz"), ("connected_switch", "varchar(255)"), ("connected_interface", "varchar(255)"), ("last_status_check", "timestamptz")):
                 conn.execute(text(f"ALTER TABLE access_point_inventory ADD COLUMN IF NOT EXISTS {column} {ddl}"))
             conn.execute(text("ALTER TABLE sites ADD COLUMN IF NOT EXISTS business_unit varchar(40) DEFAULT 'Unassigned'"))
+            conn.execute(text("ALTER TABLE wan_routers ADD COLUMN IF NOT EXISTS city varchar(120) DEFAULT ''"))
+            conn.execute(text("ALTER TABLE wan_routers ADD COLUMN IF NOT EXISTS province varchar(80) DEFAULT ''"))
     with SessionLocal() as db: seed_inventory(db)
     app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
     app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
