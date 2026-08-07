@@ -379,7 +379,7 @@ async def lm_lookup(body:NamePreview,user=Depends(current_user),db:Session=Depen
 
 
 @router.post("/inventory/{item_id}/refresh")
-async def refresh_inventory(item_id:int,user=Depends(current_user),db:Session=Depends(session)):
+async def refresh_inventory(item_id:int,user=Depends(administrator),db:Session=Depends(session)):
     row=db.get(InventoryDevice,item_id) or (_ for _ in ()).throw(HTTPException(404,"Device not found"));body=NamePreview(site_code=row.site.site_code,zone=row.zone.zone_code,device_type=row.device_type.type_code,device_number=row.device_number);result=await lm_lookup(body,user,db)
     if isinstance(result,dict) and result.get("status")=="Matched":
         match=result["candidates"][0];row.management_ip=match.get("management_ip") or row.management_ip;row.model=match.get("model") or row.model;row.os_version=match.get("os_version") or row.os_version;row.logicmonitor_device_id=match["logicmonitor_device_id"];row.logicmonitor_display_name=match["display_name"];row.logicmonitor_groups=match.get("groups",[]);row.logicmonitor_match_status="Matched";row.last_logicmonitor_sync=datetime.now(timezone.utc);audit(db,user["sub"],"logicmonitor.refresh","inventory_device",row.id,new={"status":"Matched"});db.commit()
