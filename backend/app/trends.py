@@ -32,6 +32,8 @@ def availability_trend(db: Session, weeks: int = 12) -> dict:
             "week_start": start.isoformat(),
             "availability": agg["availability"], "coverage": agg["coverage"], "status": agg["status"],
             "below_target": agg["availability"] is not None and agg["availability"] < target,
+            "downtime_minutes": max(0, agg["observed_minutes"] - agg["up_minutes"]),
+            "observed_minutes": agg["observed_minutes"],
         })
     return {"target": target, "weeks": weeks, "series": series}
 
