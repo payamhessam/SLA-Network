@@ -14,7 +14,7 @@ from .db import SlaDaily
 
 
 def _fleet_ids(db: Session) -> list[int]:
-    return [d["device_id"] for d in overview._fleet(db)]
+    return [d["device_id"] for d in overview._fleet(db) if d["device_id"]]
 
 
 def availability_trend(db: Session, weeks: int = 12) -> dict:
@@ -81,6 +81,8 @@ def incidents(db: Session, days: int = 90) -> list[dict]:
     start = ref - timedelta(days=days - 1)
     out = []
     for d in overview._fleet(db):
+        if not d["device_id"]:
+            continue
         rows = db.scalars(select(SlaDaily).where(SlaDaily.device_id == d["device_id"], SlaDaily.day >= start, SlaDaily.day <= ref).order_by(SlaDaily.day)).all()
         run = None
         for r in rows:

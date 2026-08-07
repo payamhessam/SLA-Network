@@ -34,24 +34,28 @@ def _num(v):
 
 
 def _fleet(db: Session) -> list[dict]:
-    devices = sla.monitored_devices(db)
-    inv = {i.logicmonitor_device_id: i for i in db.scalars(select(InventoryDevice).where(InventoryDevice.logicmonitor_device_id.is_not(None))).all()}
+    """The full Device Fleet = every enabled InventoryDevice, with its collected legacy
+    Device/snapshot joined where the device is mapped and monitored. Devices that are
+    registered but not yet collected are still counted (criticality, coverage) with an
+    Unknown health, so totals reflect the whole fleet, not only the monitored subset."""
+    inventory = db.scalars(select(InventoryDevice).where(InventoryDevice.enabled.is_(True))).all()
+    legacy = {d.lm_device_id: d for d in db.scalars(select(Device).where(Device.lm_device_id.is_not(None))).all()}
     sites = {s.id: s for s in db.scalars(select(Site)).all()}
     fleet = []
-    for d in devices:
-        snap = db.scalar(select(Snapshot).where(Snapshot.device_id == d.id).order_by(Snapshot.collected_at.desc()).limit(1))
-        i = inv.get(d.lm_device_id)
-        site = sites.get(i.site_id) if i else None
-        criticality = (i.criticality if i else d.criticality) or "Medium"
+    for inv in inventory:
+        dev = legacy.get(inv.logicmonitor_device_id) if inv.logicmonitor_device_id else None
+        snap = db.scalar(select(Snapshot).where(Snapshot.device_id == dev.id).order_by(Snapshot.collected_at.desc()).limit(1)) if dev else None
+        site = sites.get(inv.site_id)
+        criticality = inv.criticality or "Medium"
         fleet.append({
-            "device_id": d.id, "hostname": d.hostname, "lm_device_id": d.lm_device_id,
-            "match_status": d.match_status, "model": d.model,
+            "device_id": dev.id if dev else None, "hostname": inv.generated_name, "lm_device_id": inv.logicmonitor_device_id,
+            "match_status": (dev.match_status if dev else inv.logicmonitor_match_status), "monitored": dev is not None, "model": inv.model,
             "criticality": criticality, "band": _band(criticality),
             "site_code": site.site_code if site else None,
-            "city": (site.city if site else d.site) or "Unassigned",
+            "city": (site.city if site else "Unassigned"),
             "province": (site.province_region if site else "") or "",
             "business_unit": (getattr(site, "business_unit", None) or "Unassigned"),
-            "status": _health(snap), "snap": snap,
+            "status": _health(snap) if dev else "Unknown", "snap": snap,
             "collected_at": snap.collected_at if snap else None,
         })
     return fleet
@@ -69,8 +73,9 @@ def _fleet_window(db: Session, device_ids: list[int], start: date, end: date) ->
 def header(db: Session, fleet: list[dict]) -> dict:
     settings = get_settings()
     matched = sum(1 for d in fleet if d["match_status"] == "Matched")
+    monitored = sum(1 for d in fleet if d["monitored"])
     last_sync = max((d["collected_at"] for d in fleet if d["collected_at"]), default=None)
-    fleet_ids = [d["device_id"] for d in fleet]
+    fleet_ids = [d["device_id"] for d in fleet if d["device_id"]]
     ytd = _fleet_window(db, fleet_ids, *sla._window_bounds("ytd", sla.today_local()))
     coverage = ytd["coverage"]
     age_min = ((datetime.now(timezone.utc) - last_sync).total_seconds() / 60) if last_sync else None
@@ -82,7 +87,7 @@ def header(db: Session, fleet: list[dict]) -> dict:
         "database_status": "Connected",
         "last_sync": last_sync.isoformat() if last_sync else None,
         "data_stale": stale, "data_age_minutes": round(age_min) if age_min is not None else None,
-        "fleet_coverage": {"monitored": len(fleet), "total": len(fleet)},
+        "fleet_coverage": {"monitored": monitored, "total": len(fleet)},
         "lm_coverage": {"matched": matched, "total": len(fleet)},
         "sla_evidence_coverage": round(coverage, 1),
         "data_quality": quality,
@@ -91,7 +96,7 @@ def header(db: Session, fleet: list[dict]) -> dict:
 
 def global_sla(db: Session, fleet: list[dict]) -> dict:
     settings = get_settings()
-    ids = [d["device_id"] for d in fleet]
+    ids = [d["device_id"] for d in fleet if d["device_id"]]
     ref = sla.today_local()
     d30 = _fleet_window(db, ids, *sla._window_bounds("rolling_30", ref))
     d7 = _fleet_window(db, ids, ref - _delta(7), ref)
@@ -135,7 +140,7 @@ def criticality(db: Session, fleet: list[dict]) -> dict:
 
 def availability_series(db: Session, fleet: list[dict], days: int = 7) -> dict:
     settings = get_settings()
-    ids = [d["device_id"] for d in fleet]
+    ids = [d["device_id"] for d in fleet if d["device_id"]]
     ref = sla.today_local()
     series = []
     for n in range(days - 1, -1, -1):
@@ -212,7 +217,7 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
         groups.setdefault(d["site_code"] or d["city"], []).append(d)
     rows = []
     for key, members in sorted(groups.items(), key=lambda kv: kv[0] or ""):
-        ids = [m["device_id"] for m in members]
+        ids = [m["device_id"] for m in members if m["device_id"]]
         avail = _fleet_window(db, ids, *sla._window_bounds("ytd", ref))
         avail30 = _fleet_window(db, ids, *sla._window_bounds("rolling_30", ref))
         statuses = [m["status"] for m in members]
@@ -232,11 +237,37 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
     return rows
 
 
+def _numlike(v):
+    try:
+        n = float(v)
+        return n if n == n else None
+    except (TypeError, ValueError):
+        return None
+
+
 def throughput(db: Session, fleet: list[dict]) -> dict:
-    # LogicMonitor exposes interface utilisation/speed but not a role tag; summing every
-    # interface would double-count access/distribution/core. Executive aggregate throughput
-    # needs uplink/WAN interface tagging (Phase B), so we report it honestly rather than fake it.
-    return {"available": False, "reason": "Requires uplink/WAN interface role mapping (Phase B).", "value": None, "unit": None}
+    """Aggregate live interface throughput across all monitored operational interfaces,
+    estimated as speed x utilisation. This sums every up interface (access + uplink), so it
+    is a gross aggregate, not a WAN-egress figure; that caveat is returned with the value."""
+    total_bps = 0.0
+    counted = 0
+    for d in fleet:
+        snap = d["snap"]
+        rows = (snap.details or {}).get("tables", {}).get("Interfaces", []) if snap and isinstance(snap.details, dict) else []
+        for r in rows or []:
+            if str(r.get("Status")) != "up":
+                continue
+            speed = _numlike(r.get("Speed"))
+            util = max(_numlike(r.get("In Utilization %")) or 0.0, _numlike(r.get("Out Utilization %")) or 0.0)
+            if speed and speed > 0:
+                total_bps += speed * util / 100.0
+                counted += 1
+    if counted == 0:
+        return {"available": False, "reason": "No interface utilisation/speed collected yet.", "value": None, "unit": None}
+    gbps = total_bps / 1e9
+    value, unit = (round(gbps, 2), "Gbps") if gbps >= 1 else (round(total_bps / 1e6, 1), "Mbps")
+    return {"available": True, "value": value, "unit": unit, "interfaces": counted,
+            "note": "Aggregate across all monitored up interfaces (speed x utilisation)."}
 
 
 def executive_actions(db: Session, fleet: list[dict], gsla: dict) -> list[dict]:

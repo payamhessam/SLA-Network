@@ -87,7 +87,8 @@ async def refresh_switch_locked(db: Session, row: InventoryDevice, actor: str) -
 
 
 async def refresh_all_switches() -> dict:
-    """Refresh all enabled and mapped distribution/access switches."""
+    """Refresh every enabled, LogicMonitor-mapped device in Device Fleet (all types:
+    DSW, ASW, RTR, DAS, INR, ...), every 30 minutes in the background."""
     async with _refresh_lock:
         with SessionLocal() as db:
             rows = db.scalars(
@@ -96,7 +97,6 @@ async def refresh_all_switches() -> dict:
                 .where(
                     InventoryDevice.enabled.is_(True),
                     InventoryDevice.logicmonitor_device_id.is_not(None),
-                    InventoryDeviceType.type_code.in_(("DSW", "ASW")),
                 )
                 .order_by(InventoryDevice.id)
             ).all()

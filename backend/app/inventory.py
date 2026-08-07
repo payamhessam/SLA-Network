@@ -318,10 +318,8 @@ async def inventory_uptime(item_id:int,user=Depends(current_user),db:Session=Dep
 async def open_inventory_detail(item_id:int,user=Depends(current_user),db:Session=Depends(session)):
     row=db.get(InventoryDevice,item_id)
     if not row: raise HTTPException(404,"Device not found")
-    if row.device_type.type_code not in {"DSW", "ASW"}:
-        raise HTTPException(400,"Manual switch refresh is available only for DSW and ASW devices")
     if not row.logicmonitor_device_id:
-        raise HTTPException(409,"Switch is not mapped to LogicMonitor")
+        raise HTTPException(409,"Device is not mapped to LogicMonitor")
     try:
         legacy=await refresh_switch_locked(db,row,user["sub"])
     except Exception as exc:
