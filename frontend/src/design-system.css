@@ -48,6 +48,7 @@
   --ds-info:#0369a1; --ds-info-bg:rgba(3,105,161,.10);
 
   --ds-focus:0 0 0 3px rgba(37,99,235,.25);
+  color-scheme:light;
 }
 
 :root[data-theme="dark"]{
@@ -73,6 +74,7 @@
   --ds-focus:0 0 0 3px rgba(110,168,254,.30);
   --ds-shadow-2:0 4px 10px rgba(0,0,0,.45);
   --ds-shadow-pop:0 10px 30px rgba(0,0,0,.55);
+  color-scheme:dark;
 }
 @media (prefers-color-scheme: light){:root:not([data-theme="dark"]):not([data-theme="light"]){color-scheme:light}}
 

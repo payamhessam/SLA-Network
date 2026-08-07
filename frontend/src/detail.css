@@ -2,43 +2,27 @@
 .sla-current td{background:rgba(0,101,143,.14);font-weight:600}
 
 /* Switch detail — "Reliability Sentinel" command-center design */
+/* Device detail — colours aliased to the unified design system (design-system.css). */
 .detail-view{
-  --dv-surface:#1c2022;
-  --dv-surface-low:#181c1e;
-  --dv-surface-high:#262b2c;
-  --dv-surface-highest:#313537;
-  --dv-on:#e0e3e5;
-  --dv-on-variant:#c2c6d2;
-  --dv-primary:#a6c8ff;
-  --dv-primary-container:#00539b;
-  --dv-on-primary-container:#d4e3ff;
-  --dv-secondary:#75d2fb;
-  --dv-accent:linear-gradient(to left,rgba(0,83,155,.22),transparent);
-  --dv-good:#7fe0b6; --dv-good-bg:rgba(127,224,182,.13);
-  --dv-warn:#f4c86a; --dv-warn-bg:rgba(244,200,106,.14);
-  --dv-crit:#ffb4ab; --dv-crit-bg:rgba(255,180,171,.14);
-  --dv-ok:#75d2fb;
-  --dv-sans:'Hanken Grotesk',system-ui,-apple-system,sans-serif;
-  --dv-mono:'JetBrains Mono',ui-monospace,'Cascadia Code',monospace;
+  --dv-surface:var(--ds-surface);
+  --dv-surface-low:var(--ds-surface-2);
+  --dv-surface-high:var(--ds-surface-3);
+  --dv-surface-highest:var(--ds-line-strong);
+  --dv-on:var(--ds-ink);
+  --dv-on-variant:var(--ds-ink-2);
+  --dv-primary:var(--ds-accent);
+  --dv-primary-container:var(--ds-accent-weak);
+  --dv-on-primary-container:var(--ds-accent);
+  --dv-secondary:var(--ds-info);
+  --dv-accent:linear-gradient(to left,var(--ds-accent-weak),transparent);
+  --dv-good:var(--ds-ok); --dv-good-bg:var(--ds-ok-bg);
+  --dv-warn:var(--ds-warn); --dv-warn-bg:var(--ds-warn-bg);
+  --dv-crit:var(--ds-crit); --dv-crit-bg:var(--ds-crit-bg);
+  --dv-ok:var(--ds-info);
+  --dv-sans:var(--ds-sans);
+  --dv-mono:var(--ds-mono);
   font-family:var(--dv-sans);
   color:var(--dv-on);
-}
-:root[data-theme="light"] .detail-view{
-  --dv-surface:#ffffff;
-  --dv-surface-low:#eef2f6;
-  --dv-surface-high:#e5ebf0;
-  --dv-surface-highest:#d3dbe2;
-  --dv-on:#191c1e;
-  --dv-on-variant:#42474e;
-  --dv-primary:#00539b;
-  --dv-primary-container:#d4e3ff;
-  --dv-on-primary-container:#001c3a;
-  --dv-secondary:#00658f;
-  --dv-accent:linear-gradient(to left,rgba(0,101,143,.10),transparent);
-  --dv-good:#0f7a52; --dv-good-bg:rgba(15,122,82,.12);
-  --dv-warn:#8a6d00; --dv-warn-bg:rgba(138,109,0,.12);
-  --dv-crit:#ba1a1a; --dv-crit-bg:rgba(186,26,26,.10);
-  --dv-ok:#00658f;
 }
 
 /* Back */
@@ -128,4 +112,7 @@
   .dv-ribbon{grid-template-columns:repeat(2,1fr)}
   .dv-title{font-size:24px}
   .dv-hero-state{align-items:flex-start}
+}
+@media(max-width:520px){
+  .dv-ribbon{grid-template-columns:1fr}
 }

@@ -1,20 +1,14 @@
-/* Overview — Executive Network Reliability command center (theme-aware) */
+/* Overview command center — colours aliased to the unified design system
+ * (design-system.css). One token source, themed centrally, no page-specific palette. */
 .ov{
-  --ov-bg:#101416; --ov-surface:#1c2022; --ov-surface-low:#181c1e; --ov-surface-high:#262b2c;
-  --ov-line:#313537; --ov-on:#e0e3e5; --ov-dim:#c2c6d2; --ov-faint:#8c919c;
-  --ov-primary:#a6c8ff; --ov-track:#313537;
-  --ov-ok:#7fe0b6; --ov-warn:#f4c86a; --ov-crit:#ffb4ab; --ov-info:#75d2fb;
-  --ov-ok-bg:rgba(127,224,182,.13); --ov-warn-bg:rgba(244,200,106,.14); --ov-crit-bg:rgba(255,180,171,.14); --ov-info-bg:rgba(117,210,251,.13);
-  --ov-sans:'Hanken Grotesk',system-ui,-apple-system,sans-serif;
-  --ov-mono:'JetBrains Mono',ui-monospace,monospace;
+  --ov-bg:var(--ds-bg); --ov-surface:var(--ds-surface); --ov-surface-low:var(--ds-surface-2); --ov-surface-high:var(--ds-surface-3);
+  --ov-line:var(--ds-line); --ov-on:var(--ds-ink); --ov-dim:var(--ds-ink-2); --ov-faint:var(--ds-ink-3);
+  --ov-primary:var(--ds-accent); --ov-track:var(--ds-line);
+  --ov-ok:var(--ds-ok); --ov-warn:var(--ds-warn); --ov-crit:var(--ds-crit); --ov-info:var(--ds-info);
+  --ov-ok-bg:var(--ds-ok-bg); --ov-warn-bg:var(--ds-warn-bg); --ov-crit-bg:var(--ds-crit-bg); --ov-info-bg:var(--ds-info-bg);
+  --ov-sans:var(--ds-sans);
+  --ov-mono:var(--ds-mono);
   max-width:1440px;margin:0 auto;font-family:var(--ov-sans);color:var(--ov-on);
-}
-:root[data-theme="light"] .ov{
-  --ov-bg:#f4f7f9; --ov-surface:#ffffff; --ov-surface-low:#eef2f6; --ov-surface-high:#e5ebf0;
-  --ov-line:#d3dbe2; --ov-on:#191c1e; --ov-dim:#42474e; --ov-faint:#72777f;
-  --ov-primary:#00539b; --ov-track:#d3dbe2;
-  --ov-ok:#0f7a52; --ov-warn:#8a6d00; --ov-crit:#ba1a1a; --ov-info:#00658f;
-  --ov-ok-bg:rgba(15,122,82,.10); --ov-warn-bg:rgba(138,109,0,.10); --ov-crit-bg:rgba(186,26,26,.08); --ov-info-bg:rgba(0,101,143,.10);
 }
 
 /* Exec header */
