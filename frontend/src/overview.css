@@ -81,6 +81,20 @@
 .ov-action p{margin:0;font-size:13px;line-height:1.5;color:var(--ov-dim)}
 .ov-actions-empty{grid-column:1/-1;background:var(--ov-surface);border:1px solid var(--ov-line);border-radius:8px;padding:20px;text-align:center;color:var(--ov-ok);font-family:var(--ov-mono);font-size:13px}
 
+/* Business Unit rollup cards */
+.ov-bu{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;padding:18px}
+.ov-bu-card{background:var(--ov-surface-low);border:1px solid var(--ov-line);border-radius:8px;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.ov-bu-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ov-bu-top h3{margin:0;font-size:16px;font-weight:700;color:var(--ov-on)}
+.ov-bu-avail{display:flex;flex-direction:column;gap:2px}
+.ov-bu-avail b{font-size:30px;font-weight:700;color:var(--ov-primary);font-family:var(--ov-sans);line-height:1}
+.ov-bu-avail b.muted{font-size:18px;color:var(--ov-warn)}
+.ov-bu-avail small{font-family:var(--ov-mono);font-size:11px;color:var(--ov-faint);text-transform:uppercase;letter-spacing:.05em}
+.ov-bu-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;border-top:1px solid var(--ov-line);padding-top:12px}
+.ov-bu-stats div{display:flex;flex-direction:column;gap:3px}
+.ov-bu-stats span{font-family:var(--ov-mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ov-faint)}
+.ov-bu-stats b{font-family:var(--ov-mono);font-size:14px;color:var(--ov-on)}
+
 /* Site table */
 .ov-table-wrap{overflow-x:auto}
 .ov-table{width:100%;border-collapse:collapse;font-size:13px}

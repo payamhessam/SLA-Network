@@ -246,6 +246,36 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
     return rows
 
 
+def business_units(db: Session, fleet: list[dict]) -> list[dict]:
+    """Roll the fleet up by business unit (e.g. Healthcare vs Dental) for the compact
+    summary above the site table: YTD & 30-day availability (coverage-gated), physical
+    device count, number of sites, incident count, and an overall status. Units are
+    ordered largest-first so the biggest part of the estate leads."""
+    ref = sla.today_local()
+    groups: dict[str, list[dict]] = {}
+    for d in fleet:
+        groups.setdefault(d["business_unit"] or "Unassigned", []).append(d)
+    rows = []
+    for unit, members in groups.items():
+        ids = [m["device_id"] for m in members if m["device_id"]]
+        avail = _fleet_window(db, ids, *sla._window_bounds("ytd", ref))
+        avail30 = _fleet_window(db, ids, *sla._window_bounds("rolling_30", ref))
+        statuses = [m["status"] for m in members]
+        incidents = sum(1 for s in statuses if s in ("Critical", "Unknown"))
+        degraded = sum(1 for s in statuses if s == "Warning")
+        status = "CRITICAL" if incidents else ("DEGRADED" if degraded else ("HEALTHY" if avail["availability"] is not None else "INSUFFICIENT EVIDENCE"))
+        sites = {m["site_code"] or m["city"] for m in members}
+        rows.append({
+            "business_unit": unit,
+            "devices": sum(m["physical"] for m in members),
+            "sites": len(sites),
+            "availability_ytd": avail["availability"], "availability_30d": avail30["availability"],
+            "coverage": avail["coverage"], "incidents": incidents, "degraded": degraded,
+            "status": status,
+        })
+    return sorted(rows, key=lambda r: r["devices"], reverse=True)
+
+
 def _numlike(v):
     try:
         n = float(v)
@@ -351,6 +381,7 @@ def build(db: Session) -> dict:
         "throughput": throughput(db, fleet),
         "core_infrastructure": core_infrastructure(db, fleet),
         "actions": executive_actions(db, fleet, gsla),
+        "business_units": business_units(db, fleet),
         "sites": sites,
         "resilience": {"fleet_tier": resil.get("fleet_tier"), "as_of": resil.get("as_of")},
         "summary": executive_summary(db, fleet, gsla, crit, sites, hdr),
