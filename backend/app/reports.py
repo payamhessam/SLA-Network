@@ -90,6 +90,10 @@ def executive_excel(db: Session) -> Path:
     _table(ws, ["Metric", "Value"], rows)
     ws.cell(row=len(rows) + 5, column=1, value=o["summary"]).alignment = Alignment(wrap_text=True, vertical="top")
 
+    ws = _sheet(wb, "Business Units")
+    _table(ws, ["Business Unit", "Availability YTD", "30-Day", "Devices", "Sites", "Incidents", "Status"],
+           [(b["business_unit"], _pct(b["availability_ytd"]), _pct(b["availability_30d"]), b["devices"], b["sites"], b["incidents"], b["status"]) for b in o.get("business_units", [])])
+
     ws = _sheet(wb, "SLA by Device")
     _table(ws, ["Device", "Site", "WTD", "YTD", "Coverage YTD"],
            [(e["hostname"], e["site"], _pct(e["wtd"]["availability"]), _pct(e["ytd"]["availability"]), f"{e['ytd']['coverage']:.1f}%") for e in s["devices"]])
@@ -167,6 +171,11 @@ def executive_pptx(db: Session) -> Path:
     s = prs.slides.add_slide(blank)
     _title(s, "Executive Summary")
     _bullets(s, [o["summary"]])
+
+    s = prs.slides.add_slide(blank)
+    _title(s, "Reliability by Business Unit")
+    _bullets(s, [f"{b['business_unit']}: YTD {_pct(b['availability_ytd'])}, 30-day {_pct(b['availability_30d'])} — {b['devices']} devices across {b['sites']} site(s), {b['incidents']} incident(s) — {b['status']}."
+                 for b in o.get("business_units", [])] or ["No business units assigned."])
 
     s = prs.slides.add_slide(blank)
     _title(s, "Top Reliability Risks")
