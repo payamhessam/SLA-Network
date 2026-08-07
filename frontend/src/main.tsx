@@ -240,9 +240,9 @@ function NamingSettings(){
 }
 function AppearanceSettings(){const current=localStorage.getItem('themePreference')||'system';const setMode=(mode:string)=>{localStorage.setItem('themePreference',mode);const dark=mode==='dark'||(mode==='system'&&matchMedia('(prefers-color-scheme:dark)').matches);localStorage.setItem('theme',dark?'dark':'light');document.documentElement.dataset.theme=dark?'dark':'light';location.reload()};return <section className="panel"><h2>Appearance</h2><p className="muted">Choose a theme or follow the operating-system preference.</p><div className="theme-options">{['light','dark','system'].map(x=><button className={current===x?'active':''} onClick={()=>setMode(x)}>{x[0].toUpperCase()+x.slice(1)}</button>)}</div></section>}
 function SlaPage({role}:{role:string}){
-  const[data,setData]=useState<any>(null);const[msg,setMsg]=useState('');const[busy,setBusy]=useState(false);
+  const[data,setData]=useState<any>(null);const[msg,setMsg]=useState('');const[busy,setBusy]=useState(false);const[tr,setTr]=useState<any>(null);
   const load=()=>api('/sla/summary').then(setData).catch(x=>setMsg(x.message));
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load();api('/trends').then(setTr).catch(()=>{})},[]);
   if(!data)return <section className="panel">Loading SLA…</section>;
   const r=data.resilience||{};
   const fmt=(w:any)=>w&&w.availability!=null?w.availability.toFixed(3)+'%':(w?.status||'—');
@@ -267,6 +267,17 @@ function SlaPage({role}:{role:string}){
       <div className="panelhead"><div><h2>Per-device SLA</h2><p className="muted">Coverage-gated; missing evidence is never shown as zero. Backfill start {data.backfill_start}.</p></div></div>
       <div className="table-scroll"><table><thead><tr>{['Device','Site','WTD','YTD','Coverage (YTD)','Est. tier'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{data.devices.map((d:any)=>{const dev=(r.devices||[]).find((x:any)=>x.device_id===d.device_id);return <tr key={d.device_id}><td><b>{d.hostname}</b></td><td>{d.site}</td><td>{fmt(d.wtd)}</td><td>{fmt(d.ytd)}</td><td>{d.ytd.coverage.toFixed(1)}%</td><td>{dev?.tier||'—'}</td></tr>})}{!data.devices.length&&<tr><td colSpan={6} className="muted">No mapped switches yet. Map switches in Settings, run collection, then backfill.</td></tr>}</tbody></table></div>
     </section>
+    {tr&&<section className="panel">
+      <div className="panelhead"><div><h2>Trend intelligence &amp; incidents</h2><p className="muted">Availability-derived and coverage-gated. {tr.mttr_mtbf.basis}</p></div></div>
+      <section className="cards">
+        <article><span>Week-over-week</span><strong>{tr.deltas.wow.delta!=null?(tr.deltas.wow.delta>=0?'+':'')+tr.deltas.wow.delta.toFixed(3)+'%':'—'}</strong><small>{tr.deltas.wow.trend}</small></article>
+        <article><span>Month-over-month</span><strong>{tr.deltas.mom.delta!=null?(tr.deltas.mom.delta>=0?'+':'')+tr.deltas.mom.delta.toFixed(3)+'%':'—'}</strong><small>{tr.deltas.mom.trend}</small></article>
+        <article><span>Incidents ({tr.mttr_mtbf.window_days}d)</span><strong>{tr.mttr_mtbf.incidents}</strong><small>availability-derived</small></article>
+        <article><span>MTTR</span><strong>{tr.mttr_mtbf.mttr_minutes!=null?tr.mttr_mtbf.mttr_minutes+' min':'—'}</strong><small>mean time to recover</small></article>
+        <article><span>MTBF</span><strong>{tr.mttr_mtbf.mtbf_hours!=null?tr.mttr_mtbf.mtbf_hours+' h':'—'}</strong><small>mean time between failures</small></article>
+      </section>
+      {tr.incidents.length>0&&<div className="table-scroll"><table><thead><tr>{['Device','Site','Start','End','Days','Downtime (min)'].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{tr.incidents.slice(0,10).map((x:any,i:number)=><tr key={i}><td><b>{x.device}</b></td><td>{x.city}</td><td>{x.start}</td><td>{x.end}</td><td>{x.days}</td><td>{x.down}</td></tr>)}</tbody></table></div>}
+    </section>}
   </>;
 }
 function TelemetryPage(){

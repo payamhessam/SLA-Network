@@ -20,7 +20,7 @@ from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
-from . import overview, resilience, sla, telemetry
+from . import overview, resilience, sla, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -236,6 +236,11 @@ def overview_endpoint(user=Depends(current_user), db:Session=Depends(session)):
 @app.get("/api/v1/telemetry")
 def telemetry_endpoint(user=Depends(current_user), db:Session=Depends(session)):
     return telemetry.build(db)
+
+
+@app.get("/api/v1/trends")
+def trends_endpoint(user=Depends(current_user), db:Session=Depends(session)):
+    return trends.build(db)
 
 
 @app.get("/api/v1/sla/summary")
