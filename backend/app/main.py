@@ -20,7 +20,7 @@ from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
-from . import overview, resilience, sla, telemetry, trends
+from . import overview, reports, resilience, sla, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -203,12 +203,25 @@ def report(user=Depends(current_user), db:Session=Depends(session)):
     path=create_report(db.scalars(select(Device)).all()); return {"filename":path.name,"download_url":f"/api/v1/reports/{path.name}"}
 
 
+@app.post("/api/v1/reports/executive/excel")
+def report_executive_excel(user=Depends(current_user), db:Session=Depends(session)):
+    path=reports.executive_excel(db); audit(db,user["sub"],"report.executive_excel",path.name); db.commit()
+    return {"filename":path.name,"download_url":f"/api/v1/reports/{path.name}"}
+
+
+@app.post("/api/v1/reports/executive/pptx")
+def report_executive_pptx(user=Depends(current_user), db:Session=Depends(session)):
+    path=reports.executive_pptx(db); audit(db,user["sub"],"report.executive_pptx",path.name); db.commit()
+    return {"filename":path.name,"download_url":f"/api/v1/reports/{path.name}"}
+
+
 @app.get("/api/v1/reports/{filename}")
 def download(filename:str, user=Depends(current_user)):
-    if not re.fullmatch(r"Network_Health_[0-9_-]+\.xlsx",filename): raise HTTPException(400,"Invalid report name")
+    if not re.fullmatch(r"(Network_Health|Executive_Reliability)_[0-9_-]+\.(xlsx|pptx)",filename): raise HTTPException(400,"Invalid report name")
     path=Path(settings.report_dir)/filename
     if not path.is_file(): raise HTTPException(404,"Report not found")
-    return FileResponse(path,filename=filename,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    media="application/vnd.openxmlformats-officedocument.presentationml.presentation" if filename.endswith(".pptx") else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return FileResponse(path,filename=filename,media_type=media)
 
 
 @app.get("/api/v1/settings")

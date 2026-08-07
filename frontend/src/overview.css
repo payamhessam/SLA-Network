@@ -91,6 +91,10 @@
 .ov-table .mono{font-family:var(--ov-mono)}
 .ov-table .muted{color:var(--ov-dim);font-style:italic;font-family:var(--ov-mono);font-size:12px}
 
+/* Export buttons */
+.ov-export{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;background:var(--ov-surface-high);color:var(--ov-on);border:1px solid var(--ov-line);border-radius:6px;font-family:var(--ov-mono);font-size:12px;cursor:pointer;transition:background .12s}
+.ov-export:hover{background:var(--ov-surface)}
+
 /* Summary */
 .ov-summary{background:var(--ov-surface-low);border:1px solid var(--ov-line);border-left:3px solid var(--ov-primary);border-radius:8px;padding:16px 20px;margin-bottom:20px}
 .ov-summary h2{font-family:var(--ov-mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ov-dim);margin:0 0 8px}
