@@ -133,6 +133,7 @@ async def backfill_device(device: Device, start: date, end: date, force: bool = 
 
     async def day_metrics(day: date):
         s0, e0 = day_bounds_epoch(day)
+        e0 = min(e0, int(datetime.now(timezone.utc).timestamp()))  # today is partial: expected = minutes elapsed, not a full day
         windows = []
         a = s0
         while a < e0:

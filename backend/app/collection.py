@@ -31,6 +31,9 @@ def state(value):
     return {1: "up", 2: "down", 3: "testing"}.get(value, "unknown")
 
 
+OSPF_STATE = {1: "down", 2: "attempt", 3: "init", 4: "2-way", 5: "exstart", 6: "exchange", 7: "loading", 8: "full"}
+
+
 async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote):
     device_id = int(remote["id"]); end = int(time.time()); start = end - 3600
     props, applied = await asyncio.gather(client.properties(device_id), client.applied_datasources(device_id))
@@ -50,7 +53,7 @@ async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote)
                     return instance, {}
         return instances, await asyncio.gather(*(one(x) for x in instances))
 
-    names = ["Ping", "Cisco_CPU_SNMP", "Cisco_MemoryPools_SNMP", "Cisco_Entity_Sensors", "SNMP_Network_Interfaces", "CiscoFan-", "Cisco_System_PowerSupplies", "Cisco Switch Stack-", "Cisco Switch Stack Ports-", "SNMP_Host_Uptime", "Device_Component_Inventory", "LLDP_Neighbors", "CDP_Neighbors", "LogicMonitor_ConfigSource_Metrics", "Cisco_NTP"]
+    names = ["Ping", "Cisco_CPU_SNMP", "Cisco_MemoryPools_SNMP", "Cisco_Entity_Sensors", "SNMP_Network_Interfaces", "CiscoFan-", "Cisco_System_PowerSupplies", "Cisco Switch Stack-", "Cisco Switch Stack Ports-", "SNMP_Host_Uptime", "Device_Component_Inventory", "LLDP_Neighbors", "CDP_Neighbors", "LogicMonitor_ConfigSource_Metrics", "Cisco_NTP", "OSPF_Neighbors"]
     results = dict(zip(names, await asyncio.gather(*(source(x, 24 if x == "Ping" else 1) for x in names))))
 
     ping_pairs = results["Ping"][1]; ping_data = ping_pairs[0][1] if ping_pairs else {}; ping_now = latest(ping_data)
@@ -90,6 +93,10 @@ async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote)
     config_rows=[]
     for inst,data in results["LogicMonitor_ConfigSource_Metrics"][1]:
         v=latest(data); config_rows.append({"Running Config":inst.get("displayName") or inst.get("name"),"Running Saved":v.get("Result") in (0,1),"Startup Config":"LogicMonitor ConfigSource","Startup Saved":v.get("CleanExit")==1,"Collected":datetime.now(timezone.utc).isoformat()})
+    ospf_rows=[]
+    for inst,data in results["OSPF_Neighbors"][1]:
+        v=latest(data); ps=v.get("peerState")
+        ospf_rows.append({"Neighbor":inst.get("displayName") or inst.get("name"),"State":OSPF_STATE.get(int(ps),"unknown") if isinstance(ps,(int,float)) else "Not available from LogicMonitor","Neighbor Events":v.get("neighborEvents"),"Restarts":v.get("NeighborRestart"),"Retransmit Queue":v.get("retransQueueSize")})
 
     model_text=props.get("auto.endpoint.model", "")
     inventory_models = [
@@ -109,5 +116,5 @@ async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote)
     uptime = next((value for value in uptime_values if isinstance(value, (int, float))), None)
     serial = next((row["Serial Number"] for row in inventory_rows if re.fullmatch(r"[A-Z0-9]{8,}", str(row.get("Serial Number") or ""), re.I)), None)
     collection_rows = [{"DataSource": name, "Instance": ds.get("instanceNumber", 0), "Success": True, "Latest Data": "Queried from LogicMonitor", "Error": None} for name, ds in by_name.items() if name in names]
-    details={"model":model,"os_version":os_version,"serial":serial,"uptime":uptime,"ping":{"loss":loss,"average":ping_now.get("average"),"max":ping_now.get("maxrtt"),"min":ping_now.get("minrtt"),"p95":percentile(avgs,.95),"availability_24h":availability},"tables":{"Interfaces":interface_rows,"Environmental and PoE":sensor_rows,"Inventory":inventory_rows,"CDP-LLDP Neighbors":neighbor_rows,"Configuration Backups":config_rows,"Collection Details":collection_rows,"VLANs":[],"Spanning Tree":[],"Alerts":[]},"mapping":{"device_id":device_id,"datasources":{k:{"id":v.get("id"),"name":k,"instances":v.get("instanceNumber")} for k,v in by_name.items() if k in names}}}
+    details={"model":model,"os_version":os_version,"serial":serial,"uptime":uptime,"ping":{"loss":loss,"average":ping_now.get("average"),"max":ping_now.get("maxrtt"),"min":ping_now.get("minrtt"),"p95":percentile(avgs,.95),"availability_24h":availability},"tables":{"Interfaces":interface_rows,"Environmental and PoE":sensor_rows,"Inventory":inventory_rows,"CDP-LLDP Neighbors":neighbor_rows,"OSPF Neighbors":ospf_rows,"Configuration Backups":config_rows,"Collection Details":collection_rows,"VLANs":[],"Spanning Tree":[],"Alerts":[]},"mapping":{"device_id":device_id,"datasources":{k:{"id":v.get("id"),"name":k,"instances":v.get("instanceNumber")} for k,v in by_name.items() if k in names}}}
     return {"status":status,"availability":availability,"cpu":cpu,"memory":memory,"temperature":max(temperatures,default=None),"details":details,"model":model,"os_version":os_version}

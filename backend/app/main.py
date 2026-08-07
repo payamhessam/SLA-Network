@@ -20,7 +20,7 @@ from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
-from . import overview, resilience, sla
+from . import overview, resilience, sla, telemetry
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -105,6 +105,7 @@ DETAIL_TABLES = {
     "Interfaces": ["Interface", "Description", "Status", "VLAN", "Duplex", "Speed", "Type", "Align Errors", "FCS/CRC Errors", "TX Errors", "RX Errors", "Undersize", "Out Discards"],
     "VLANs": ["VLAN ID", "Name", "Status", "Ports"],
     "CDP-LLDP Neighbors": ["Protocol", "Local Interface", "Neighbor", "Management IP", "Platform/Model", "Remote Port"],
+    "OSPF Neighbors": ["Neighbor", "State", "Neighbor Events", "Restarts", "Retransmit Queue"],
     "Inventory": ["Component", "Description", "PID", "VID", "Serial Number"],
     "Spanning Tree": ["Instance", "Blocking", "Listening", "Learning", "Forwarding", "Active"],
     "Environmental and PoE": ["Category", "Switch/Module", "Component/Interface", "State", "Temperature C", "Fan RPM", "Watts", "Details"],
@@ -230,6 +231,11 @@ def overview_endpoint(user=Depends(current_user), db:Session=Depends(session)):
     if _overview_cache["data"] is None or now - _overview_cache["at"] > 30:
         _overview_cache["data"] = overview.build(db); _overview_cache["at"] = now
     return _overview_cache["data"]
+
+
+@app.get("/api/v1/telemetry")
+def telemetry_endpoint(user=Depends(current_user), db:Session=Depends(session)):
+    return telemetry.build(db)
 
 
 @app.get("/api/v1/sla/summary")
