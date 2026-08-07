@@ -91,6 +91,12 @@
 .ov-table .mono{font-family:var(--ov-mono)}
 .ov-table .muted{color:var(--ov-dim);font-style:italic;font-family:var(--ov-mono);font-size:12px}
 
+/* Section help "ⓘ" tooltip (used on Fleet + SLA pages) */
+.help{position:relative;display:inline-flex;align-items:center;color:#8c919c;cursor:help;margin-left:7px;vertical-align:middle}
+.help:hover,.help:focus{color:#75d2fb;outline:none}
+.help-tip{position:absolute;top:calc(100% + 8px);left:0;width:max-content;max-width:300px;background:#1c2022;color:#e0e3e5;border:1px solid #3a4048;border-radius:6px;padding:9px 11px;font-family:'Hanken Grotesk',system-ui,sans-serif;font-size:12px;line-height:1.5;font-weight:400;letter-spacing:normal;text-transform:none;white-space:normal;box-shadow:0 8px 24px rgba(0,0,0,.4);opacity:0;visibility:hidden;transition:opacity .12s;z-index:60;pointer-events:none}
+.help:hover .help-tip,.help:focus .help-tip{opacity:1;visibility:visible}
+
 /* Export buttons */
 .ov-export{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;background:var(--ov-surface-high);color:var(--ov-on);border:1px solid var(--ov-line);border-radius:6px;font-family:var(--ov-mono);font-size:12px;cursor:pointer;transition:background .12s}
 .ov-export:hover{background:var(--ov-surface)}
