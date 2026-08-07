@@ -94,6 +94,7 @@
 .ov-bu-stats div{display:flex;flex-direction:column;gap:3px}
 .ov-bu-stats span{font-family:var(--ov-mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ov-faint)}
 .ov-bu-stats b{font-family:var(--ov-mono);font-size:14px;color:var(--ov-on)}
+.ov-bu-note{margin-top:12px;padding-top:10px;border-top:1px dashed var(--ov-line);font-size:11.5px;line-height:1.45;color:var(--ov-faint)}
 
 /* Site table */
 .ov-table-wrap{overflow-x:auto}

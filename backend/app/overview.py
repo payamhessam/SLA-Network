@@ -6,7 +6,7 @@ sla_daily and resilience stores that the background collectors already maintain.
 Missing evidence is reported as INSUFFICIENT EVIDENCE / NOT MONITORED / UNKNOWN — never
 fabricated as 0% or 100%.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -242,8 +242,38 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
             "critical_devices": incidents, "degraded_devices": degraded,
             "criticality": max((m["band"] for m in members), key=lambda b: {"Critical": 3, "High": 2, "Standard": 1}[b]),
             "status": worst,
+            "since": _month_label(avail.get("first_observed")),
+            "reason": _commission_reason(avail, ref),
         })
     return rows
+
+
+def _month_label(iso: str | None) -> str | None:
+    """'2026-06-04' -> 'Jun 2026'."""
+    if not iso:
+        return None
+    try:
+        d = date.fromisoformat(iso)
+        return d.strftime("%b %Y")
+    except ValueError:
+        return None
+
+
+def _commission_reason(agg: dict, ref: date) -> str | None:
+    """Human explanation of a partial-year / not-yet-published window, so the UI can show
+    a reason instead of a bare 'Insufficient'. Returns None when the full year is covered."""
+    year_start = date(ref.year, 1, 1)
+    first = agg.get("first_observed")
+    newest = agg.get("newest_observed")
+    if agg.get("availability") is None:
+        # Genuinely below the evidence threshold even after trimming pre-commissioning days.
+        if first and date.fromisoformat(first) > year_start:
+            return f"New — monitoring began {_month_label(first)}; baseline still building."
+        return "Awaiting sufficient telemetry to publish a governed figure."
+    # Published, but did the measured period start after Jan 1 (a mid-year project)?
+    if newest and date.fromisoformat(newest) > year_start + timedelta(days=7):
+        return f"YTD reflects each site's monitored period; newest commissioned {_month_label(newest)}."
+    return None
 
 
 def business_units(db: Session, fleet: list[dict]) -> list[dict]:
@@ -272,6 +302,8 @@ def business_units(db: Session, fleet: list[dict]) -> list[dict]:
             "availability_ytd": avail["availability"], "availability_30d": avail30["availability"],
             "coverage": avail["coverage"], "incidents": incidents, "degraded": degraded,
             "status": status,
+            "since": _month_label(avail.get("first_observed")),
+            "reason": _commission_reason(avail, ref),
         })
     return sorted(rows, key=lambda r: r["devices"], reverse=True)
 
@@ -310,30 +342,68 @@ def throughput(db: Session, fleet: list[dict]) -> dict:
 
 
 def executive_actions(db: Session, fleet: list[dict], gsla: dict) -> list[dict]:
+    """Deterministic, business-impact-ranked recommendations. Each item names the affected
+    asset, the evidence, and a concrete recommended next step — ordered so the highest
+    business exposure (criticality x severity) surfaces first. Site-level clustering and a
+    monitoring-coverage gap are included so leadership sees systemic issues, not just a
+    list of individual devices."""
+    band_w = {"Critical": 3, "High": 2, "Standard": 1}
     actions = []
+    # -- per-device conditions --
     for d in fleet:
         sev, label, value, status = _device_problem(d)
-        if status == "UNKNOWN" and d["band"] in ("Critical", "High"):
-            actions.append({"priority": 1, "severity": "P1", "title": f"Restore monitoring evidence for {d['hostname']}",
-                            "detail": f"{d['hostname']} ({d['city']}) has no recent LogicMonitor evidence; reliability cannot be confirmed for a {d['band'].lower()}-criticality device.",
-                            "device_id": d["device_id"], "_rank": 100 + {"Critical": 3, "High": 2}.get(d["band"], 1)})
+        b = d["band"]
+        if status == "UNKNOWN" and b in ("Critical", "High"):
+            actions.append({"severity": "P1", "title": f"Restore monitoring evidence for {d['hostname']}",
+                            "detail": f"{d['hostname']} ({d['city']}, {b.lower()} criticality) has no recent LogicMonitor evidence, so its reliability can't be confirmed. "
+                                      f"Recommended: verify the device is powered and reachable, then confirm the LogicMonitor collector and SNMP credentials.",
+                            "device_id": d["device_id"], "_rank": 100 + band_w[b]})
         elif status == "CRITICAL":
-            actions.append({"priority": 1, "severity": "P1", "title": f"Investigate critical condition on {d['hostname']}",
-                            "detail": f"{d['hostname']} ({d['city']}) reports {label} {value}. Validate hardware/environment before it affects site availability.",
-                            "device_id": d["device_id"], "_rank": 90 + {"Critical": 3, "High": 2, "Standard": 1}[d["band"]]})
+            fix = "Dispatch to replace the failed hardware component" if label == "Hardware" else "Engage the on-call network engineer to triage the fault"
+            actions.append({"severity": "P1", "title": f"Investigate critical condition on {d['hostname']}",
+                            "detail": f"{d['hostname']} ({d['city']}) reports {label.lower()} {value}. Recommended: {fix} before it affects site availability.",
+                            "device_id": d["device_id"], "_rank": 90 + band_w[b]})
         elif status in ("HIGH CPU", "HIGH MEM", "HIGH TEMP"):
-            actions.append({"priority": 2, "severity": "P2", "title": f"Address capacity risk on {d['hostname']}",
-                            "detail": f"{d['hostname']} ({d['city']}) {label} at {value} and trending toward its warning threshold.",
-                            "device_id": d["device_id"], "_rank": 50 + {"Critical": 3, "High": 2, "Standard": 1}[d["band"]]})
+            fix = {"HIGH CPU": "review control-plane load / ACLs and plan a capacity upgrade",
+                   "HIGH MEM": "check for memory leaks or oversized tables and schedule a maintenance reload",
+                   "HIGH TEMP": "inspect cooling/airflow and ambient temperature at the site"}[status]
+            actions.append({"severity": "P2", "title": f"Address capacity risk on {d['hostname']}",
+                            "detail": f"{d['hostname']} ({d['city']}) {label} at {value}, approaching its warning threshold. Recommended: {fix}.",
+                            "device_id": d["device_id"], "_rank": 50 + band_w[b]})
+    # -- site-level clustering: a site with several impaired devices is a systemic risk --
+    site_hits: dict[str, dict] = {}
+    for d in fleet:
+        sev, _l, _v, status = _device_problem(d)
+        if status in ("CRITICAL", "UNKNOWN", "HIGH CPU", "HIGH MEM", "HIGH TEMP", "WARNING"):
+            s = site_hits.setdefault(d["city"], {"n": 0, "crit": False})
+            s["n"] += 1
+            s["crit"] = s["crit"] or status in ("CRITICAL", "UNKNOWN")
+    for city, info in site_hits.items():
+        if info["n"] >= 2:
+            actions.append({"severity": "P1" if info["crit"] else "P2", "title": f"{city} site shows {info['n']} impaired devices",
+                            "detail": f"{info['n']} devices at {city} are simultaneously degraded or unreachable — a possible shared cause (power, WAN, or upstream). "
+                                      f"Recommended: check the site's power/WAN uplink and treat as a single site incident rather than isolated devices.",
+                            "device_id": None, "_rank": 80 if info["crit"] else 60})
+    # -- single-point-of-failure exposure (from the resilience model) --
     latest = resilience.latest_assessment(db)
     for dev in (latest.get("devices") or []):
         if dev.get("tier") == "Tier I" and dev.get("score", 0) <= 1:
-            actions.append({"priority": 2, "severity": "P2", "title": f"Reduce single-point-of-failure exposure at {dev['hostname']}",
-                            "detail": f"{dev['hostname']} shows no redundant uplink/stack/power path (Tier I-equivalent). Availability may be healthy today but a single failure removes the site path.",
+            actions.append({"severity": "P2", "title": f"Reduce single-point-of-failure exposure at {dev['hostname']}",
+                            "detail": f"{dev['hostname']} has no redundant uplink/stack/power path (Tier I-equivalent): healthy today, but one failure removes the site path. "
+                                      f"Recommended: add a redundant uplink or stack member where the site's criticality justifies it.",
                             "device_id": dev.get("device_id"), "_rank": 40})
+    # -- monitoring coverage gap --
+    unmatched = sum(1 for d in fleet if d["match_status"] != "Matched")
+    if unmatched:
+        actions.append({"severity": "P3", "title": f"Map {unmatched} device(s) to LogicMonitor",
+                        "detail": f"{unmatched} fleet device(s) are not yet matched to a LogicMonitor device, so they contribute no reliability evidence. "
+                                  f"Recommended: complete the mapping in Device Fleet so they count toward the SLA.",
+                        "device_id": None, "_rank": 30})
+    # -- fleet SLA below target --
     if gsla["current"] is not None and gsla["current"] < gsla["target"]:
-        actions.append({"priority": 2, "severity": "P2", "title": "Fleet SLA below target",
-                        "detail": f"30-day network availability is {gsla['current']:.3f}% against a {gsla['target']}% target. Review the lowest-availability sites.",
+        actions.append({"severity": "P2", "title": "Fleet SLA below target",
+                        "detail": f"30-day network availability is {gsla['current']:.3f}% against a {gsla['target']}% target. "
+                                  f"Recommended: start with the lowest-availability sites in the table below and address their recurring downtime.",
                         "device_id": None, "_rank": 45})
     actions.sort(key=lambda a: -a["_rank"])
     seen, out = set(), []

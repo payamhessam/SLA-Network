@@ -229,10 +229,36 @@ def _window_bounds(kind: str, ref: date) -> tuple[date, date]:
 
 
 def _aggregate(rows: list[SlaDaily]) -> dict:
+    """Aggregate daily rollup rows into availability + coverage.
+
+    Coverage is measured over each device's *observable* period, not the raw calendar
+    window: for every device we drop the leading run of days with zero observed minutes
+    (the period before it was commissioned / added to monitoring). Measuring availability
+    before a device was ever polled is meaningless and would unfairly show a mid-year
+    project as "Insufficient". Genuine outages still count — a device that is down is
+    still *observed* (ping runs, loss=100%), so only truly un-monitored lead-in days are
+    trimmed. The commissioning dates are returned so a partial-year figure can be labelled
+    honestly instead of blanked.
+    """
     threshold = get_settings().coverage_threshold
-    expected = sum(r.expected_minutes for r in rows)
-    observed = sum(r.observed_minutes for r in rows)
-    up = sum(r.up_minutes for r in rows)
+    by_device: dict[int | None, list[SlaDaily]] = {}
+    for r in rows:
+        by_device.setdefault(getattr(r, "device_id", None), []).append(r)
+    expected = observed = up = 0
+    first_days: list[date] = []
+    for drows in by_device.values():
+        if all(getattr(r, "day", None) is not None for r in drows):
+            drows.sort(key=lambda r: r.day)
+        start = next((i for i, r in enumerate(drows) if r.observed_minutes > 0), None)
+        if start is None:
+            continue  # this device was never observed in the window
+        measurable = drows[start:]
+        day0 = getattr(measurable[0], "day", None)
+        if day0 is not None:
+            first_days.append(day0)
+        expected += sum(r.expected_minutes for r in measurable)
+        observed += sum(r.observed_minutes for r in measurable)
+        up += sum(r.up_minutes for r in measurable)
     coverage = (100.0 * observed / expected) if expected else 0.0
     availability = (100.0 * up / observed) if observed else None
     sufficient = coverage >= threshold and availability is not None
@@ -243,6 +269,8 @@ def _aggregate(rows: list[SlaDaily]) -> dict:
         "observed_minutes": observed,
         "expected_minutes": expected,
         "days": len(rows),
+        "first_observed": min(first_days).isoformat() if first_days else None,
+        "newest_observed": max(first_days).isoformat() if first_days else None,
         "status": "ok" if sufficient else "Insufficient evidence",
     }
 

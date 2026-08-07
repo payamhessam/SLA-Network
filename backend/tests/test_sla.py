@@ -9,8 +9,8 @@ os.environ.setdefault("JWT_SECRET", "test-secret-long-enough")
 from app import resilience, sla
 
 
-def _day(expected, observed, up):
-    return SimpleNamespace(expected_minutes=expected, observed_minutes=observed, up_minutes=up)
+def _day(expected, observed, up, device_id=1, day=None):
+    return SimpleNamespace(expected_minutes=expected, observed_minutes=observed, up_minutes=up, device_id=device_id, day=day)
 
 
 def test_aggregate_gates_on_coverage_and_never_fabricates_zero():
@@ -22,6 +22,34 @@ def test_aggregate_gates_on_coverage_and_never_fabricates_zero():
     assert thin["status"] == "Insufficient evidence" and thin["availability"] is None
     # No rows -> Insufficient
     assert sla._aggregate([])["availability"] is None
+
+
+def test_aggregate_trims_pre_commissioning_days_so_new_sites_are_publishable():
+    from datetime import date, timedelta
+    jan1 = date(2026, 1, 1)
+    # A device commissioned mid-window: 100 empty (un-monitored) days, then 20 fully-polled days.
+    rows = [_day(1440, 0, 0, device_id=7, day=jan1 + timedelta(days=i)) for i in range(100)]
+    rows += [_day(1440, 1440, 1440, device_id=7, day=jan1 + timedelta(days=120 + i)) for i in range(20)]
+    agg = sla._aggregate(rows)
+    # Leading zero-observed days are trimmed -> full coverage over the monitored period,
+    # 100% availability, and the commissioning date is surfaced (not blanked as Insufficient).
+    assert agg["status"] == "ok"
+    assert agg["availability"] == 100.0
+    assert agg["coverage"] == 100.0
+    assert agg["first_observed"] == (jan1 + timedelta(days=120)).isoformat()
+
+
+def test_aggregate_per_device_trim_does_not_penalise_mixed_group():
+    from datetime import date, timedelta
+    jan1 = date(2026, 1, 1)
+    # One device present all window (high coverage) + one commissioned late (empty lead-in).
+    old = [_day(1440, 1440, 1440, device_id=1, day=jan1 + timedelta(days=i)) for i in range(120)]
+    new_empty = [_day(1440, 0, 0, device_id=2, day=jan1 + timedelta(days=i)) for i in range(110)]
+    new_live = [_day(1440, 1440, 1439, device_id=2, day=jan1 + timedelta(days=120 + i)) for i in range(10)]
+    agg = sla._aggregate(old + new_empty + new_live)
+    # The late device's empty months must not drag the group below the coverage gate.
+    assert agg["status"] == "ok"
+    assert agg["coverage"] == 100.0
 
 
 def test_counts_from_samples_handles_descending_time():
