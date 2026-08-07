@@ -35,7 +35,7 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
   const nb=rows.map(parse);
   const groups=new Map<string,{name:string,links:any[]}>();
   nb.forEach(n=>{const k=n.name.toLowerCase();const g=groups.get(k)||{name:n.name,links:[]};g.links.push(n);groups.set(k,g)});
-  const nodes=[...groups.values()].map(g=>{const seen=new Set<string>();const ulinks:any[]=[];g.links.forEach(l=>{const key=(l.local||'?')+'|'+(l.remote||'?');if(seen.has(key))return;seen.add(key);ulinks.push(l)});return{name:g.name,ulinks}});
+  const nodes=[...groups.values()].map(g=>{const seen=new Set<string>();const ulinks:any[]=[];g.links.forEach(l=>{if(l.local){if(seen.has(l.local))return;seen.add(l.local)}ulinks.push(l)});return{name:g.name,ulinks}});
   const anyDual=nodes.some(g=>g.ulinks.length>1);
   const kind=(name:string)=>/wap|(?:^|[-_])ap(?:[-_]|$)/i.test(name)?'ap':/dsw|asw|sw|switch|rtr|router/i.test(name)?'sw':'dev';
   const nodeColor=(g:{ulinks:any[]})=>g.ulinks.length>1?P.dual:(g.ulinks[0].protocol==='CDP'?P.cdp:P.lldp);
