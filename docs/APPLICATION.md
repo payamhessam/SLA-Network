@@ -157,7 +157,27 @@ Routing, interface, and latency detail — plus a transparency panel.
 - **Latency & Loss** — average and worst-case round-trip latency and packet loss (from Ping).
   **Jitter is Not monitored** (the Cisco IP-SLA jitter datasource has no instances).
 
-### 4.7 Settings (Administrators)
+### 4.7 WAN Providers (isolated — not part of Medline metrics)
+A deliberately **separate** page for the WAN providers' own routers (e.g. Centrilogic
+circuits). These devices are **not** Medline's; they are collected read-only from
+LogicMonitor for visibility only and are **never** included in the fleet SLA, Overview,
+resilience, trends, or reports. They live in their own database table (`wan_routers`) so
+they cannot leak into any company analytic.
+
+- **Executive summary** — router count and health mix, average 24-hour reachability,
+  established BGP peers, full OSPF adjacencies, and up interfaces. Descriptive counts
+  only — no availability is scored against Medline.
+- **By Provider** — routers grouped by the provider/circuit parsed from each device name.
+- **Provider Routers** — every router with live status, reachability, BGP/OSPF/interface
+  counts, and last sync. Open one for full detail.
+- **Router detail** — a metric ribbon plus a **Routing Coverage** matrix (what LM really
+  exposes for that router) and tabs: **BGP Peers, OSPF Neighbors, EIGRP Peers, IP Routing
+  Stats, Interfaces, Inventory, Neighbors**. Empty datasources show "Not monitored";
+  static routes are not monitored in this tenant.
+- **Admin-only** add/remove (search LogicMonitor by name/IP and import; removal only
+  detaches from this view — LogicMonitor is never modified). Refreshed every 30 minutes.
+
+### 4.8 Settings (Administrators)
 Device Inventory (add/import/map devices), Site Codes (with Business Unit), Device Naming (add/remove
 Zones and Device Types with their role mappings — changes flow into the "Add device" pickers),
 Appearance (theme), and other configuration.

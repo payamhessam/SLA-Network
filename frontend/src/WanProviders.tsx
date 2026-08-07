@@ -1,0 +1,109 @@
+/*
+ * WanProviders.tsx — the WAN Providers page (carrier-managed provider routers).
+ *
+ * A deliberately separate, read-only view of the WAN providers' routers (e.g.
+ * Centrilogic circuits). These devices are NOT Medline's and are never counted in the
+ * company's SLA, Overview, or reports. The page mirrors the Fleet + Overview style:
+ * an executive summary, a per-provider breakdown, a router table, and a device-detail
+ * view with routing tabs (BGP / OSPF / EIGRP / IP routing stats / interfaces / inventory
+ * / neighbours). Only administrators can add or remove routers. Data: /wan/*.
+ */
+import React,{useEffect,useMemo,useState}from'react';
+import{Activity,ArrowLeft,Globe,Plus,RefreshCw,Router as RouterIcon,Search,ShieldAlert,Trash2,X}from'lucide-react';
+import Help from'./Help';
+import'./overview.css';
+
+type Props={token:string;administrator:boolean};
+const badge=(s:string)=>{const x=(s||'').toLowerCase();if(x.includes('healthy')||x.includes('monitored')&&!x.includes('not'))return'ok';if(x.includes('warn')||x.includes('applied'))return'warn';if(x.includes('critical'))return'crit';return'unknown'};
+const num=(v:any,d=0)=>typeof v==='number'?v.toFixed(d):'—';
+const reach=(v:any)=>typeof v==='number'?v.toFixed(2)+'%':'—';
+
+export default function WanProviders({token,administrator}:Props){
+  const[ov,setOv]=useState<any>(null);const[rows,setRows]=useState<any[]>([]);
+  const[error,setError]=useState('');const[busy,setBusy]=useState(false);
+  const[detail,setDetail]=useState<any>(null);const[tab,setTab]=useState('BGP Peers');
+  const[adding,setAdding]=useState(false);const[q,setQ]=useState('');const[found,setFound]=useState<any[]>([]);const[searching,setSearching]=useState(false);
+  const request=async(path:string,options:RequestInit={})=>{const r=await fetch('/api/v1'+path,{...options,headers:{Authorization:`Bearer ${token}`,...(options.body?{'Content-Type':'application/json'}:{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Request failed');return r.status===204?null:r.json()};
+  const load=async()=>{setError('');try{const[o,l]=await Promise.all([request('/wan/overview'),request('/wan/routers')]);setOv(o);setRows(l.items)}catch(x:any){setError(x.message)}};
+  useEffect(()=>{load()},[]);
+  const openDetail=async(id:number)=>{setBusy(true);try{setDetail(await request(`/wan/routers/${id}`));setTab('BGP Peers')}catch(x:any){setError(x.message)}finally{setBusy(false)}};
+  const refreshOne=async(id:number)=>{setBusy(true);try{await request(`/wan/routers/${id}/refresh`,{method:'POST'});await load();if(detail?.id===id)setDetail(await request(`/wan/routers/${id}`))}catch(x:any){setError(x.message)}finally{setBusy(false)}};
+  const remove=async(r:any)=>{if(!confirm(`Remove "${r.display_name}" from WAN Providers? This only removes it from this view — LogicMonitor is untouched.`))return;setBusy(true);try{await request(`/wan/routers/${r.id}`,{method:'DELETE'});if(detail?.id===r.id)setDetail(null);await load()}catch(x:any){setError(x.message)}finally{setBusy(false)}};
+  const search=async()=>{if(q.trim().length<2)return;setSearching(true);setError('');try{setFound((await request('/wan/search?q='+encodeURIComponent(q.trim()))).items)}catch(x:any){setError(x.message)}finally{setSearching(false)}};
+  const add=async(lm_device_id:number)=>{setBusy(true);try{await request('/wan/routers',{method:'POST',body:JSON.stringify({lm_device_id})});setFound(f=>f.filter(x=>x.lm_device_id!==lm_device_id));await load()}catch(x:any){setError(x.message)}finally{setBusy(false)}};
+
+  if(detail)return <WanDetail d={detail} back={()=>setDetail(null)} tab={tab} setTab={setTab} admin={administrator} busy={busy} refresh={()=>refreshOne(detail.id)}/>;
+
+  return <div className="ov">
+    <div className="ov-exec"><div><div className="ov-eyebrow">WAN PROVIDER NETWORK</div><h1 className="ov-title">WAN Providers</h1></div>
+      {administrator&&<button className="ov-export" onClick={()=>{setAdding(a=>!a);setFound([]);setQ('')}}>{adding?<X size={15}/>:<Plus size={15}/>} {adding?'Close':'Add router'}</button>}</div>
+    {error&&<div className="ov-summary" style={{borderLeftColor:'var(--ov-crit)'}}><p style={{color:'var(--ov-crit)'}}>{error}</p></div>}
+
+    <div className="ov-summary"><h2>Provider-managed — not part of Medline metrics<Help text="These are the WAN providers' routers (e.g. Centrilogic circuits), shown read-only for visibility. They are collected from LogicMonitor but are never included in Medline's SLA, Overview, trends, or reports."/></h2>
+      <p>{ov?.note||'WAN provider-managed routers — shown for visibility only.'}</p></div>
+
+    {administrator&&adding&&<div className="ov-panel"><div className="ov-panel-head"><h2><Search size={15}/> Add a router from LogicMonitor</h2></div>
+      <div style={{padding:'16px 18px'}}>
+        <div style={{display:'flex',gap:8}}><input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder="Search LogicMonitor by name or IP (e.g. Centrilogic, Bell, 900 Harbourside)" style={{flex:1,padding:'9px 12px',background:'var(--ov-surface-low)',border:'1px solid var(--ov-line)',borderRadius:6,color:'var(--ov-on)',fontFamily:'var(--ov-mono)',fontSize:13}}/><button className="ov-export" onClick={search} disabled={searching}>{searching?'Searching…':'Search'}</button></div>
+        {found.length>0&&<div className="ov-table-wrap" style={{marginTop:14}}><table className="ov-table"><thead><tr><th>LogicMonitor device</th><th>Management IP</th><th>LM id</th><th></th></tr></thead>
+          <tbody>{found.map(f=><tr key={f.lm_device_id}><td>{f.display_name}</td><td className="mono">{f.management_ip||'—'}</td><td className="mono">{f.lm_device_id}</td><td><button className="ov-export" onClick={()=>add(f.lm_device_id)} disabled={busy}><Plus size={14}/> Add</button></td></tr>)}</tbody></table></div>}
+      </div></div>}
+
+    <div className="ov-kpis" style={{gridTemplateColumns:'repeat(4,1fr)'}}>
+      <Kpi label="Routers" value={ov?ov.routers:'—'} sub={ov?`${ov.healthy} healthy · ${ov.warning} warning · ${ov.critical} critical`:''}/>
+      <Kpi label="Avg reachability (24h)" value={ov?reach(ov.avg_reachability):'—'} sub="Ping success across routers"/>
+      <Kpi label="BGP peers established" value={ov?`${ov.bgp_established}/${ov.bgp_peers}`:'—'} sub="Established / total"/>
+      <Kpi label="OSPF full · interfaces up" value={ov?`${ov.ospf_full} · ${ov.interfaces_up}/${ov.interfaces}`:'—'} sub="Full adjacencies · up interfaces"/>
+    </div>
+
+    <div className="ov-panel"><div className="ov-panel-head"><h2><Globe size={15}/> By Provider<Help text="Routers grouped by the provider/circuit parsed from each device name. Counts are descriptive (routers, established BGP peers, full OSPF adjacencies, healthy routers) — no availability is scored."/></h2><span className="tag">{ov?.providers?.length||0} providers</span></div>
+      <div className="ov-bu">{(ov?.providers||[]).map((p:any,i:number)=><div key={i} className="ov-bu-card"><div className="ov-bu-top"><h3 style={{fontSize:15}}>{p.provider}</h3><span className="ov-badge unknown">{p.routers} rtr</span></div>
+        <div className="ov-bu-stats" style={{gridTemplateColumns:'repeat(3,1fr)',borderTop:0,paddingTop:0}}><div><span>Healthy</span><b>{p.healthy}/{p.routers}</b></div><div><span>BGP est.</span><b>{p.bgp}</b></div><div><span>OSPF full</span><b>{p.ospf}</b></div></div></div>)}</div></div>
+
+    <div className="ov-panel"><div className="ov-panel-head"><h2><RouterIcon size={15}/> Provider Routers<Help text="Every WAN provider router with live read-only state: status, 24h reachability, established BGP peers, full OSPF adjacencies, and up interfaces. Open a router for full routing detail. Admins can add or remove routers."/></h2><span className="tag">{rows.length} routers</span></div>
+      <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Router','Provider / Circuit','Site','Status','Reach 24h','BGP','OSPF','Interfaces','Last sync',''].map(h=><th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{rows.map(r=><tr key={r.id}>
+          <td><a style={{color:'var(--ov-primary)',cursor:'pointer',fontWeight:600}} onClick={()=>openDetail(r.id)}>{r.display_name}</a></td>
+          <td>{r.provider||'—'}</td><td>{r.site_label||'—'}</td>
+          <td><span className={'ov-badge '+badge(r.status)}>{(r.status||'Unknown').toUpperCase()}</span></td>
+          <td className="mono">{reach(r.reachability)}</td>
+          <td className="mono">{r.bgp_peers!=null?`${r.bgp_established??0}/${r.bgp_peers}`:'—'}</td>
+          <td className="mono">{r.ospf_full!=null?r.ospf_full:'—'}</td>
+          <td className="mono">{r.interfaces!=null?`${r.interfaces_up??0}/${r.interfaces}`:'—'}</td>
+          <td className="mono" style={{color:'var(--ov-faint)'}}>{r.last_sync?new Date(r.last_sync).toLocaleString():'—'}</td>
+          <td style={{whiteSpace:'nowrap'}}><button className="ov-export" style={{padding:'4px 8px'}} onClick={()=>openDetail(r.id)}>Detail</button>{administrator&&<button className="ov-export" style={{padding:'4px 8px',marginLeft:6}} onClick={()=>remove(r)} disabled={busy} title="Remove"><Trash2 size={13}/></button>}</td>
+        </tr>)}{rows.length===0&&<tr><td colSpan={10} style={{textAlign:'center',color:'var(--ov-dim)',padding:20}}>No WAN routers yet.{administrator?' Use “Add router” to import one from LogicMonitor.':''}</td></tr>}</tbody></table></div></div>
+  </div>;
+}
+
+function Kpi({label,value,sub}:{label:string;value:any;sub:string}){
+  return <div className="ov-card" style={{minHeight:120}}><h3>{label}</h3><div className="center"><div className="ov-ring-val" style={{fontSize:28}}>{value}</div><div className="ov-sub" style={{textAlign:'center'}}>{sub}</div></div></div>;
+}
+
+const TABS=['BGP Peers','OSPF Neighbors','EIGRP Peers','IP Routing Stats','Interfaces','Inventory','Neighbors'];
+function WanDetail({d,back,tab,setTab,admin,busy,refresh}:{d:any;back:()=>void;tab:string;setTab:(t:string)=>void;admin:boolean;busy:boolean;refresh:()=>void}){
+  const det=d.details||{};const tables=det.tables||{};const rows=tables[tab]||[];
+  const cov=det.routing_coverage||[];
+  const cols=useMemo(()=>rows.length?Object.keys(rows[0]):[],[rows]);
+  return <div className="ov">
+    <div className="ov-exec"><div><div className="ov-eyebrow" style={{cursor:'pointer'}} onClick={back}>← WAN PROVIDERS</div><h1 className="ov-title" style={{fontSize:24}}>{d.display_name}</h1><div className="ov-sub">{d.provider} · {d.site_label} · {d.management_ip||'no IP'}</div></div>
+      {admin&&<button className="ov-export" onClick={refresh} disabled={busy}><RefreshCw size={15}/> {busy?'Refreshing…':'Refresh'}</button>}</div>
+
+    <div className="ov-kpis" style={{gridTemplateColumns:'repeat(5,1fr)'}}>
+      <Kpi label="Status" value={(d.status||'Unknown').toUpperCase()} sub="Informational only"/>
+      <Kpi label="Reachability 24h" value={reach(d.reachability)} sub="Ping success"/>
+      <Kpi label="CPU / Memory" value={`${num(d.cpu)} / ${num(d.memory)}%`} sub="Latest sample"/>
+      <Kpi label="BGP established" value={`${det.counts?.bgp_established??0}/${det.counts?.bgp_peers??0}`} sub="Peers"/>
+      <Kpi label="OSPF full" value={det.counts?.ospf_full??0} sub={`${det.counts?.interfaces_up??0}/${det.counts?.interfaces??0} interfaces up`}/>
+    </div>
+
+    <div className="ov-panel"><div className="ov-panel-head"><h2><ShieldAlert size={15}/> Routing Coverage<Help text="What LogicMonitor actually exposes for THIS router. 'Monitored' means live instances exist; 'Applied · no instances' means the datasource is attached but empty; 'Not monitored' means no datasource. Static routes are not monitored in this tenant."/></h2></div>
+      <div className="ov-table-wrap"><table className="ov-table"><thead><tr><th>Protocol</th><th>LogicMonitor source</th><th>Coverage</th><th>Instances</th></tr></thead>
+        <tbody>{cov.map((c:any,i:number)=><tr key={i}><td>{c.protocol}</td><td className="mono">{c.source}</td><td><span className={'ov-badge '+badge(c.status)}>{c.status}</span></td><td className="mono">{c.peers}</td></tr>)}</tbody></table></div></div>
+
+    <div className="ov-panel"><div className="ov-panel-head" style={{gap:8,flexWrap:'wrap'}}>{TABS.map(t=><button key={t} className="ov-export" style={{padding:'6px 12px',background:t===tab?'var(--ov-primary)':'var(--ov-surface-high)',color:t===tab?'#04203b':'var(--ov-on)',borderColor:t===tab?'var(--ov-primary)':'var(--ov-line)'}} onClick={()=>setTab(t)}>{t}{tables[t]?.length?` (${tables[t].length})`:''}</button>)}</div>
+      <div className="ov-table-wrap">{rows.length?<table className="ov-table"><thead><tr>{cols.map(c=><th key={c}>{c}</th>)}</tr></thead>
+        <tbody>{rows.map((row:any,i:number)=><tr key={i}>{cols.map(c=><td key={c} className={typeof row[c]==='number'?'mono':''}>{row[c]==null?<span className="muted">—</span>:String(row[c])}</td>)}</tr>)}</tbody></table>
+        :<div style={{padding:22,textAlign:'center',color:'var(--ov-dim)'}}>Not monitored — LogicMonitor exposes no {tab.toLowerCase()} for this router.</div>}</div></div>
+  </div>;
+}

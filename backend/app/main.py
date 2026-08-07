@@ -29,6 +29,7 @@ from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
+from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
 from . import overview, reports, resilience, sla, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
@@ -37,6 +38,7 @@ app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 app.include_router(inventory_router)
 app.include_router(access_point_router)
+app.include_router(wan_router)
 
 
 @app.on_event("startup")
@@ -52,13 +54,15 @@ async def startup():
     app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
     app.state.resilience_task = asyncio.create_task(resilience.resilience_loop())
     app.state.ap_status_task = asyncio.create_task(ap_status_loop())
+    app.state.wan_refresh_task = asyncio.create_task(wan_refresh_loop())
+    app.state.wan_bootstrap_task = asyncio.create_task(bootstrap_wan())
     if not await sla.has_history():
         app.state.sla_backfill_task = asyncio.create_task(sla.backfill_all())
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    for name in ("switch_refresh_task", "sla_rollup_task", "resilience_task", "ap_status_task", "sla_backfill_task"):
+    for name in ("switch_refresh_task", "sla_rollup_task", "resilience_task", "ap_status_task", "wan_refresh_task", "wan_bootstrap_task", "sla_backfill_task"):
         task = getattr(app.state, name, None)
         if task:
             task.cancel()

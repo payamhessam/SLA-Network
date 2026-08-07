@@ -211,6 +211,37 @@ class ResilienceAssessment(Base):
     rationale: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class WanRouter(Base):
+    """WAN provider / carrier-edge routers (e.g. Centrilogic-managed circuits).
+
+    These devices belong to the WAN providers, NOT to Medline. They are collected
+    read-only from LogicMonitor for visibility only and are deliberately kept in
+    their own table so they can NEVER be joined into the Device Fleet analytics
+    (SLA, Overview, resilience, trends, reports). The latest collected snapshot is
+    stored inline on the row (status/details JSON) — no history, since nothing about
+    these routers is ever charted or scored for the company."""
+    __tablename__ = "wan_routers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(120), default="")
+    site_label: Mapped[str] = mapped_column(String(180), default="")
+    management_ip: Mapped[str | None] = mapped_column(String(64))
+    lm_device_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    match_status: Mapped[str] = mapped_column(String(40), default="Pending")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(40), default="Unknown")
+    cpu: Mapped[float | None] = mapped_column(Float)
+    memory: Mapped[float | None] = mapped_column(Float)
+    temperature: Mapped[float | None] = mapped_column(Float)
+    uptime: Mapped[float | None] = mapped_column(Float)
+    reachability: Mapped[float | None] = mapped_column(Float)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_by: Mapped[str] = mapped_column(String(120), default="")
+
+
 database_url = get_settings().database_url
 engine = create_engine(database_url, pool_pre_ping=True, **({"connect_args":{"check_same_thread":False},"poolclass":StaticPool} if database_url.startswith("sqlite") else {"pool_size":12,"max_overflow":24,"pool_timeout":30}))
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
