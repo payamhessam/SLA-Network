@@ -1,3 +1,14 @@
+/*
+ * main.tsx — application shell and top-level pages.
+ *
+ * Renders the login screen, the navigation frame, and the primary pages: the
+ * Overview command center (fleet-scoped executive dashboard fetched from /overview),
+ * the SLA & Resilience page, the Network Telemetry page, and the device-detail view.
+ * The Device Fleet and Access Points pages live in their own modules (InventoryFleet
+ * and AccessPoints). Auth token handling and theme (dark/light/system) live here too.
+ * The code is intentionally dense; the <Help> tooltips and docs/APPLICATION.md explain
+ * what each section means for end users.
+ */
 import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{Activity,AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,LockKeyhole,LogOut,MemoryStick,Moon,Plus,Radio,Router,ShieldCheck,Sun,Terminal,Trash2}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import Help from'./Help'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css'; import'./overview.css';
 type Device={id:number;hostname:string;management_ip?:string;site:string;role:string;criticality:string;device_type:string;model?:string;active:boolean;match_status:string};
 const getToken=()=>localStorage.getItem('token')||sessionStorage.getItem('token');

@@ -1,3 +1,11 @@
+"""Authentication and role-based authorization.
+
+Issues and verifies short-lived signed JWT bearer tokens, verifies credentials with a
+constant-time comparison, and exposes FastAPI dependencies used to gate endpoints:
+`current_user` (any authenticated caller), `administrator` (Administrator only), and
+role checks for collection. These dependencies are the enforcement points for the
+app's least-privilege model.
+"""
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 import hmac

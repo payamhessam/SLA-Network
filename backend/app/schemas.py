@@ -1,3 +1,9 @@
+"""Pydantic request/response schemas for the device API.
+
+Defines the validated shapes for creating/updating devices and returning device
+data. Field constraints here (hostname pattern, length limits, enum literals, IP
+validation) are the first line of input validation before anything reaches the ORM.
+"""
 from ipaddress import ip_address
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator

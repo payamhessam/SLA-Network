@@ -1,3 +1,11 @@
+"""Database engine, session factory, and SQLAlchemy ORM models.
+
+Defines every persistent table: users, the local Device Fleet inventory (sites,
+zones, device types, InventoryDevice) and its legacy Device/Snapshot collection
+store, the daily SLA rollup (SlaDaily), resilience assessments, access points, and
+audit events. Also builds the engine and SessionLocal factory with a connection pool
+sized for the concurrent background collectors.
+"""
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, create_engine

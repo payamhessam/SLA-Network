@@ -1,3 +1,11 @@
+/*
+ * AccessPoints.tsx — the Access Points page.
+ *
+ * Lists the Cisco 9120/9130 access-point inventory and their derived Online/Offline
+ * status (inferred every ~2h from switch CDP/LLDP neighbor tables, with the connected
+ * switch/interface and last-seen time). Administrators can add, import (CSV/Excel),
+ * and remove APs here. Status is inferred evidence, never a fabricated up/down flag.
+ */
 import React,{useEffect,useMemo,useState}from'react';
 import{AlertTriangle,CheckCircle2,FileSpreadsheet,Radio,RefreshCw,Upload,Wifi,WifiOff}from'lucide-react';
 import'./access-points.css';

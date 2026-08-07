@@ -1,3 +1,11 @@
+"""Application settings, loaded from environment / Docker secret files.
+
+Defines the typed Settings model (database URL, LogicMonitor portal + credentials,
+SLA target/timezone/coverage threshold, JWT secret, collection intervals, etc.) and
+`get_settings()`, an lru_cached accessor used everywhere. In production the sensitive
+values are read from mounted Docker secret files rather than the repository, so the
+defaults here are safe placeholders only.
+"""
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse

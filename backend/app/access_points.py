@@ -1,3 +1,12 @@
+"""Access Point inventory and derived online/offline status.
+
+Manages the Cisco 9120/9130 access-point inventory (add/import/edit/remove) and,
+because LogicMonitor does not monitor these APs directly, derives each AP's status
+every couple of hours: an AP is considered Online when its name or MAC appears in the
+CDP/LLDP neighbor table of any monitored switch, Offline when it does not — recording
+the connected switch, interface, and last-seen time. Status is inferred evidence,
+never a fabricated up/down flag.
+"""
 import asyncio
 import hashlib
 import io

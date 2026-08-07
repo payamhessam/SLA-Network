@@ -1,3 +1,12 @@
+"""Device Fleet inventory router: the local, authoritative device registry.
+
+Endpoints here let administrators add, import (CSV/Excel), edit, map, and remove the
+switches/routers that make up Device Fleet — the scope every analytic in the app is
+restricted to. Mapping a device links it to a LogicMonitor device id; refreshing a
+device pulls a fresh read-only snapshot. Also serves site codes, zones, and device
+types (the building blocks of the generated device names). Nothing here ever writes
+to LogicMonitor — only to this application's own inventory tables.
+"""
 import csv
 import io
 import re

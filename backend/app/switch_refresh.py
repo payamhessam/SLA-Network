@@ -1,3 +1,11 @@
+"""Background and on-demand device refresh from LogicMonitor.
+
+`refresh_switch` re-collects one mapped Fleet device and writes a fresh Snapshot plus
+an audit event; `refresh_all_switches` walks every enabled, mapped device (all types:
+DSW/ASW/RTR/DAS/INR/...) and is run on a timer by `switch_refresh_loop` every
+`switch_collection_interval_minutes` (30 by default). A module-level asyncio lock
+serialises refreshes so a manual refresh and the background loop can't collide.
+"""
 import asyncio
 import logging
 from datetime import datetime, timezone

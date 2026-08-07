@@ -1,3 +1,11 @@
+"""Read-only LogicMonitor API client with LMv1 request signing.
+
+Wraps httpx with a pooled, keep-alive client per portal and signs every request using
+the LMv1 HMAC-SHA256 scheme. The client is deliberately read-only: any non-GET method
+is rejected locally before it can leave the process, TLS certificates are always
+verified, and 429/Retry-After responses are honoured with backoff. This is the single
+choke point through which the whole application talks to LogicMonitor.
+"""
 import asyncio, base64, hashlib, hmac, time
 from urllib.parse import urlencode
 import httpx

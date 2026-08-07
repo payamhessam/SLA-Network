@@ -1,3 +1,13 @@
+"""LogicMonitor collection: turn raw read-only API responses into a device snapshot.
+
+`collect_logicmonitor_device` fans out a set of read-only GETs for one device
+(device properties, datasource instances, and recent datapoints for health, ping,
+interfaces, VLANs, CDP/LLDP, OSPF, environment/PoE, alerts, config backups, etc.),
+then normalises them into a single snapshot dict: a top-level status/availability/
+cpu/memory/temperature plus a `details` object of per-tab tables the UI renders.
+Where a datasource is not mapped for this tenant, the corresponding table is left
+empty so the UI can show "Not available from LogicMonitor" rather than a fake zero.
+"""
 import asyncio
 import math
 import re
@@ -8,6 +18,8 @@ from .logicmonitor import LogicMonitorClient
 
 
 def latest(data):
+    # Reduce a LogicMonitor datapoint time-series to its most recent sample:
+    # zip the datapoint names with the last row of values (empty if no data).
     points, values = data.get("dataPoints", []), data.get("values", [])
     return dict(zip(points, values[-1])) if values else {}
 

@@ -1,3 +1,12 @@
+"""FastAPI application entry point and HTTP API for the Network Health & SLA portal.
+
+This module wires everything together: it builds the FastAPI app, applies security
+headers and CORS, mounts the feature routers (inventory, access points, reports),
+defines the authentication/collection/SLA/overview/telemetry/trends endpoints, and
+starts the background schedulers (device refresh, SLA rollup, resilience, AP status,
+SLA backfill) on startup. All analytics endpoints read from the local database; the
+only outbound traffic to LogicMonitor is read-only, signed GET requests.
+"""
 import asyncio, csv, io, logging, re, time, uuid
 from contextlib import suppress
 from collections import defaultdict

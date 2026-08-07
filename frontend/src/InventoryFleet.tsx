@@ -1,3 +1,12 @@
+/*
+ * InventoryFleet.tsx — the Device Fleet & SLA Compliance page.
+ *
+ * Shows the operational switch/router inventory with fleet summary KPIs, the 12-week
+ * compliance combo chart (availability line + downtime bars + SLA target line, from
+ * /trends), the per-device fleet status table (WTD/YTD availability), and the critical
+ * applications panel. Data comes from /inventory, /sla/summary, and /trends; each
+ * section carries a <Help> ⓘ tooltip describing what it means.
+ */
 import React,{useEffect,useMemo,useState}from'react';
 import{Activity,AlertTriangle,CheckCircle2,Download,Filter,MonitorCog,RefreshCw,Server,ShieldCheck}from'lucide-react';
 import './fleet.css';
