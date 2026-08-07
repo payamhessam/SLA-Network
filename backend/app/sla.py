@@ -333,6 +333,15 @@ async def has_history() -> bool:
         return db.scalar(select(SlaDaily.id).limit(1)) is not None
 
 
+async def needs_backfill() -> bool:
+    """True when any mapped, active device has no SLA history yet — e.g. a device added
+    after the initial backfill. Lets startup top-up newcomers instead of only seeding on
+    a completely empty database."""
+    with SessionLocal() as db:
+        have = {r[0] for r in db.execute(select(SlaDaily.device_id).distinct()).all()}
+        return any(d.id not in have for d in monitored_devices(db))
+
+
 async def sla_rollup_loop() -> None:
     """Every 6h: recompute yesterday..today for every mapped switch."""
     while True:

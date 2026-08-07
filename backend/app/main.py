@@ -58,7 +58,10 @@ async def startup():
     app.state.ap_status_task = asyncio.create_task(ap_status_loop())
     app.state.wan_refresh_task = asyncio.create_task(wan_refresh_loop())
     app.state.wan_bootstrap_task = asyncio.create_task(bootstrap_wan())
-    if not await sla.has_history():
+    if await sla.needs_backfill():
+        # Seed an empty database, or top up devices added after the first backfill
+        # (force=False resumes each device from its last covered day, so this is cheap
+        # for devices already up to date and full-history only for newcomers).
         app.state.sla_backfill_task = asyncio.create_task(sla.backfill_all())
 
 
