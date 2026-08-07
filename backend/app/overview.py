@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from . import resilience, sla
 from .config import get_settings
 from .db import Device, InventoryDevice, ResilienceAssessment, Site, SlaDaily, Snapshot
+from .inventory import physical_switch_count
 
 
 def _band(criticality: str) -> str:
@@ -47,10 +48,18 @@ def _fleet(db: Session) -> list[dict]:
         snap = db.scalar(select(Snapshot).where(Snapshot.device_id == dev.id).order_by(Snapshot.collected_at.desc()).limit(1)) if dev else None
         site = sites.get(inv.site_id)
         criticality = inv.criticality or "Medium"
+        # Physical chassis count: a switch stack is several physical switches behind one
+        # logical device. For DSW/ASW use the collected stack/chassis evidence (falling
+        # back to 1 when unconfirmed); routers/other single-chassis types count as 1.
+        type_code = inv.device_type.type_code if inv.device_type else None
+        if type_code in {"DSW", "ASW"} and snap:
+            physical = physical_switch_count(snap.details)[0] or 1
+        else:
+            physical = 1
         fleet.append({
             "device_id": dev.id if dev else None, "hostname": inv.generated_name, "lm_device_id": inv.logicmonitor_device_id,
             "match_status": (dev.match_status if dev else inv.logicmonitor_match_status), "monitored": dev is not None, "model": inv.model,
-            "criticality": criticality, "band": _band(criticality),
+            "criticality": criticality, "band": _band(criticality), "physical": physical,
             "site_code": site.site_code if site else None,
             "city": (site.city if site else "Unassigned"),
             "province": (site.province_region if site else "") or "",
@@ -227,7 +236,7 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
         first = members[0]
         rows.append({
             "site_code": first["site_code"], "city": first["city"], "province": first["province"],
-            "business_unit": first["business_unit"], "devices": len(members),
+            "business_unit": first["business_unit"], "devices": sum(m["physical"] for m in members),
             "availability_ytd": avail["availability"], "availability_30d": avail30["availability"],
             "coverage": avail["coverage"], "device_health": worst,
             "critical_devices": incidents, "degraded_devices": degraded,
