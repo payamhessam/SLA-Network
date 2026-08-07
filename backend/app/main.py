@@ -20,7 +20,7 @@ from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
-from . import resilience, sla
+from . import overview, resilience, sla
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -37,6 +37,7 @@ async def startup():
         with engine.begin() as conn:
             for column, ddl in (("status", "varchar(20) DEFAULT 'Offline'"), ("last_seen", "timestamptz"), ("connected_switch", "varchar(255)"), ("connected_interface", "varchar(255)"), ("last_status_check", "timestamptz")):
                 conn.execute(text(f"ALTER TABLE access_point_inventory ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+            conn.execute(text("ALTER TABLE sites ADD COLUMN IF NOT EXISTS business_unit varchar(40) DEFAULT 'Unassigned'"))
     with SessionLocal() as db: seed_inventory(db)
     app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
     app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
@@ -218,6 +219,17 @@ def app_settings(user=Depends(administrator)):
 def device_sla_endpoint(device_id:int, user=Depends(current_user), db:Session=Depends(session)):
     if not db.get(Device, device_id): raise HTTPException(404,"Device not found")
     return {"device_id":device_id,"timezone":settings.sla_timezone,"target":settings.sla_target,"windows":sla.device_sla(db, device_id)}
+
+
+_overview_cache = {"at": 0.0, "data": None}
+
+
+@app.get("/api/v1/overview")
+def overview_endpoint(user=Depends(current_user), db:Session=Depends(session)):
+    now = time.time()
+    if _overview_cache["data"] is None or now - _overview_cache["at"] > 30:
+        _overview_cache["data"] = overview.build(db); _overview_cache["at"] = now
+    return _overview_cache["data"]
 
 
 @app.get("/api/v1/sla/summary")

@@ -60,6 +60,7 @@ class Site(Base):
     city: Mapped[str] = mapped_column(String(120))
     province_region: Mapped[str] = mapped_column(String(80), default="")
     country: Mapped[str] = mapped_column(String(80), default="Canada")
+    business_unit: Mapped[str] = mapped_column(String(40), default="Unassigned")
     description: Mapped[str | None] = mapped_column(String(500))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

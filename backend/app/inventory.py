@@ -58,6 +58,7 @@ class SiteIn(BaseModel):
     city: str = Field(min_length=1,max_length=120)
     province_region: str = Field(default="",max_length=80)
     country: str = Field(default="Canada",min_length=1,max_length=80)
+    business_unit: str = Field(default="Unassigned",max_length=40)
     description: str | None = Field(default=None,max_length=500)
     enabled: bool = True
     @field_validator("site_code")
@@ -220,7 +221,7 @@ def sites(q:str="", user=Depends(current_user), db:Session=Depends(session)):
     for x in rows:
         switches=db.scalars(select(InventoryDevice).join(InventoryDeviceType).where(InventoryDevice.site_id==x.id,InventoryDeviceType.type_code.in_(("DSW","ASW")))).all()
         evidence=[switch_evidence(db,d)[0] for d in switches]
-        response.append({"id":x.id,"site_code":x.site_code,"city":x.city,"province_region":x.province_region,"country":x.country,"description":x.description,"enabled":x.enabled,"number_of_devices":sum(value for value in evidence if value is not None),"switch_count_pending":sum(value is None for value in evidence),"last_modified":x.updated_at,"modified_by":x.updated_by})
+        response.append({"id":x.id,"site_code":x.site_code,"city":x.city,"province_region":x.province_region,"country":x.country,"business_unit":x.business_unit,"description":x.description,"enabled":x.enabled,"number_of_devices":sum(value for value in evidence if value is not None),"switch_count_pending":sum(value is None for value in evidence),"last_modified":x.updated_at,"modified_by":x.updated_by})
     return response
 
 
