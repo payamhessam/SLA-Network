@@ -18,12 +18,14 @@ from sqlalchemy.orm import Session
 from . import overview, resilience, sla, telemetry, trends
 from .config import get_settings
 
-NAVY = "102A43"
-BLUE = "00539B"
-STEEL = "243B53"
-_BLUE = RGBColor(0x00, 0x53, 0x9B)
-_NAVY = RGBColor(0x10, 0x2A, 0x43)
-_GREY = RGBColor(0x55, 0x60, 0x6B)
+# Palette aligned to the "Executive Precision" design system (Deep Navy / Slate + blue).
+NAVY = "0F172A"   # primary — headers
+BLUE = "2563EB"   # accent  — links / emphasis
+STEEL = "334155"  # secondary — table header fill
+ZEBRA = "F1F5F9"  # alternating table rows
+_BLUE = RGBColor(0x25, 0x63, 0xEB)
+_NAVY = RGBColor(0x0F, 0x17, 0x2A)
+_GREY = RGBColor(0x64, 0x74, 0x8B)
 
 
 def _safe(v):
@@ -57,9 +59,12 @@ def _table(ws, headers, rows, row=3):
         cell = ws.cell(row=row, column=c, value=h)
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor=STEEL)
+    zebra = PatternFill("solid", fgColor=ZEBRA)
     for r, data in enumerate(rows, row + 1):
         for c, value in enumerate(data, 1):
-            ws.cell(row=r, column=c, value=_safe(value))
+            cell = ws.cell(row=r, column=c, value=_safe(value))
+            if (r - row) % 2 == 0:  # alternating-row shading, per the design system
+                cell.fill = zebra
     for i, _ in enumerate(headers):
         ws.column_dimensions[chr(65 + i)].width = 24
     ws.freeze_panes = ws.cell(row=row + 1, column=1)
