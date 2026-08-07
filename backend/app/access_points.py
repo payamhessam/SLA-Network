@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import io
+import logging
 import re
 import time
 import uuid
@@ -13,7 +15,9 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .auth import administrator, current_user
-from .db import AccessPointImport, AccessPointInventory, AuditEvent, Device, Site, Snapshot, session
+from .db import AccessPointImport, AccessPointInventory, AuditEvent, Device, SessionLocal, Site, Snapshot, session
+
+logger = logging.getLogger(__name__)
 
 router=APIRouter(prefix="/api/v1/access-points",tags=["Access Points"])
 REQUIRED=["AP Name","AP Model","IP Address","AP Radio MAC","Ethernet MAC","Serial Number","Site Tag"]
@@ -45,7 +49,35 @@ def detected(ap,neighbors):
 
 def row_json(ap,neighbors):
     match=detected(ap,neighbors)
-    return {"id":ap.id,"status":"Online" if match else "Offline","ap_name":ap.ap_name,"site_code":ap.site_code,"city":ap.city or "Unknown Site","province":ap.province or "","country":ap.country or "","ap_model":ap.ap_model,"ip_address":ap.ip_address,"ethernet_mac":ap.ethernet_mac,"radio_mac":ap.radio_mac,"serial_number":ap.serial_number,"last_neighbor_detection":match["detected"] if match else None,"connected_switch":match["switch"] if match else None,"connected_interface":match["interface"] if match else None,"unknown_site":not bool(ap.city)}
+    return {"id":ap.id,"status":"Online" if match else "Offline","ap_name":ap.ap_name,"site_code":ap.site_code,"city":ap.city or "Unknown Site","province":ap.province or "","country":ap.country or "","ap_model":ap.ap_model,"ip_address":ap.ip_address,"ethernet_mac":ap.ethernet_mac,"radio_mac":ap.radio_mac,"serial_number":ap.serial_number,"last_neighbor_detection":match["detected"] if match else None,"connected_switch":match["switch"] if match else None,"connected_interface":match["interface"] if match else None,"last_seen":ap.last_seen,"last_status_check":ap.last_status_check,"unknown_site":not bool(ap.city)}
+
+
+def refresh_ap_status(db):
+    """Persist each AP's online/offline status from the CDP-LLDP neighbors of all switches."""
+    neighbors=latest_neighbors(db);now=datetime.now(timezone.utc);aps=db.scalars(select(AccessPointInventory)).all();online=0
+    for ap in aps:
+        match=detected(ap,neighbors)
+        ap.status="Online" if match else "Offline"
+        ap.connected_switch=match["switch"] if match else None
+        ap.connected_interface=match["interface"] if match else None
+        ap.last_status_check=now
+        if match:
+            ap.last_seen=match["detected"] or now;online+=1
+    db.commit()
+    return {"total":len(aps),"online":online,"offline":len(aps)-online}
+
+
+async def ap_status_loop():
+    """Check AP presence in switch CDP-LLDP neighbors every 2 hours (and once at startup)."""
+    while True:
+        try:
+            with SessionLocal() as db: result=refresh_ap_status(db)
+            logger.info("AP status refreshed: %s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("AP status refresh failed (%s)", type(exc).__name__)
+        await asyncio.sleep(2*3600)
 
 
 @router.get("")

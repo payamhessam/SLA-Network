@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     switch_collection_interval_minutes: int = 30
     sla_target: float = 99.9
     coverage_threshold: float = 90.0
+    sla_timezone: str = "America/Vancouver"
+    sla_backfill_start: str = "2026-01-01"
+    availability_source: str = "Ping"
+    sla_query_hours: int = 8
 
     @field_validator("lm_portal_url")
     @classmethod

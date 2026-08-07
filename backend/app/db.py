@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -151,6 +151,11 @@ class AccessPointInventory(Base):
     import_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     imported_by: Mapped[str] = mapped_column(String(120))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    status: Mapped[str] = mapped_column(String(20), default="Offline")
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    connected_switch: Mapped[str | None] = mapped_column(String(255))
+    connected_interface: Mapped[str | None] = mapped_column(String(255))
+    last_status_check: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AccessPointImport(Base):
@@ -166,6 +171,35 @@ class AccessPointImport(Base):
     import_mode: Mapped[str] = mapped_column(String(20), default="replace")
     status: Mapped[str] = mapped_column(String(30), default="Validated")
     rows: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class SlaDaily(Base):
+    __tablename__ = "sla_daily"
+    __table_args__ = (UniqueConstraint("device_id", "day", name="uq_sla_daily_device_day"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    day: Mapped[Date] = mapped_column(Date, index=True)
+    expected_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    observed_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    up_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    availability: Mapped[float | None] = mapped_column(Float)
+    coverage: Mapped[float] = mapped_column(Float, default=0.0)
+    source: Mapped[str] = mapped_column(String(120), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ResilienceAssessment(Base):
+    __tablename__ = "resilience_assessments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    scope: Mapped[str] = mapped_column(String(20), default="fleet")
+    device_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    tier: Mapped[str] = mapped_column(String(30), default="Insufficient")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    availability_wtd: Mapped[float | None] = mapped_column(Float)
+    availability_ytd: Mapped[float | None] = mapped_column(Float)
+    signals: Mapped[dict] = mapped_column(JSON, default=dict)
+    rationale: Mapped[list] = mapped_column(JSON, default=list)
 
 
 database_url = get_settings().database_url

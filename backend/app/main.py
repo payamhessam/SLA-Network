@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -16,10 +16,11 @@ from .config import get_settings
 from .db import AuditEvent, Base, Device, SessionLocal, Snapshot, engine, session
 from .logicmonitor import LogicMonitorClient, match_device
 from .inventory import router as inventory_router, seed_inventory
-from .access_points import router as access_point_router
+from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
+from . import resilience, sla
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -32,17 +33,27 @@ app.include_router(access_point_router)
 @app.on_event("startup")
 async def startup():
     Base.metadata.create_all(engine)
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            for column, ddl in (("status", "varchar(20) DEFAULT 'Offline'"), ("last_seen", "timestamptz"), ("connected_switch", "varchar(255)"), ("connected_interface", "varchar(255)"), ("last_status_check", "timestamptz")):
+                conn.execute(text(f"ALTER TABLE access_point_inventory ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     with SessionLocal() as db: seed_inventory(db)
     app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
+    app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
+    app.state.resilience_task = asyncio.create_task(resilience.resilience_loop())
+    app.state.ap_status_task = asyncio.create_task(ap_status_loop())
+    if not await sla.has_history():
+        app.state.sla_backfill_task = asyncio.create_task(sla.backfill_all())
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    task = getattr(app.state, "switch_refresh_task", None)
-    if task:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+    for name in ("switch_refresh_task", "sla_rollup_task", "resilience_task", "ap_status_task", "sla_backfill_task"):
+        task = getattr(app.state, name, None)
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 @app.middleware("http")
@@ -79,7 +90,8 @@ def health(db: Session = Depends(session)):
 def dashboard(user=Depends(current_user), db: Session = Depends(session)):
     devices = db.scalars(select(Device)).all(); counts = defaultdict(int)
     for d in devices: counts["active" if d.active else "inactive"] += 1; counts[d.device_type] += 1; counts[d.match_status] += 1
-    return {"devices":len(devices), "counts":counts, "sla":{"actual":None,"target":settings.sla_target,"coverage":0,"status":"Baseline pending"}, "last_collection":None}
+    fleet = sla.fleet_sla(db); fy = fleet["fleet_ytd"]
+    return {"devices":len(devices), "counts":counts, "sla":{"actual":fy["availability"],"target":settings.sla_target,"coverage":fy["coverage"],"status":fy["status"],"as_of":fleet["as_of"]}, "last_collection":None}
 
 
 @app.get("/api/v1/devices", response_model=list[DeviceOut])
@@ -200,3 +212,27 @@ def download(filename:str, user=Depends(current_user)):
 @app.get("/api/v1/settings")
 def app_settings(user=Depends(administrator)):
     return {"sla_target":settings.sla_target,"coverage_threshold":settings.coverage_threshold,"stale_minutes":settings.stale_minutes,"switch_collection_interval_minutes":settings.switch_collection_interval_minutes,"logicmonitor_portal":settings.lm_portal_url,"credentials_configured":bool(settings.access_id and settings.access_key)}
+
+
+@app.get("/api/v1/devices/{device_id}/sla")
+def device_sla_endpoint(device_id:int, user=Depends(current_user), db:Session=Depends(session)):
+    if not db.get(Device, device_id): raise HTTPException(404,"Device not found")
+    return {"device_id":device_id,"timezone":settings.sla_timezone,"target":settings.sla_target,"windows":sla.device_sla(db, device_id)}
+
+
+@app.get("/api/v1/sla/summary")
+def sla_summary(user=Depends(current_user), db:Session=Depends(session)):
+    summary = sla.fleet_sla(db); summary["resilience"] = resilience.latest_assessment(db); return summary
+
+
+@app.get("/api/v1/sla/resilience")
+def sla_resilience(user=Depends(current_user), db:Session=Depends(session)):
+    return resilience.latest_assessment(db)
+
+
+@app.post("/api/v1/sla/backfill")
+async def sla_backfill(user=Depends(administrator), db:Session=Depends(session)):
+    result = await sla.backfill_all(force=False)
+    await resilience.run_assessment()
+    audit(db, user["sub"], "sla.backfill", "LogicMonitor", {"devices":result["devices"]}); db.commit()
+    return result

@@ -1,3 +1,6 @@
+/* SLA & Resilience — highlight the estimated tier row */
+.sla-current td{background:rgba(0,101,143,.14);font-weight:600}
+
 /* Switch detail — "Reliability Sentinel" command-center design */
 .detail-view{
   --dv-surface:#1c2022;
