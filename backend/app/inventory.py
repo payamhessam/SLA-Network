@@ -253,6 +253,12 @@ def zones(user=Depends(current_user),db:Session=Depends(session)): return [{"id"
 def add_zone(body:ZoneIn,user=Depends(administrator),db:Session=Depends(session)): row=Zone(**body.model_dump());db.add(row);db.flush();audit(db,user["sub"],"zone.create","zone",row.id,new=body.model_dump());db.commit();return {"id":row.id,**body.model_dump()}
 @router.put("/settings/zones/{item_id}")
 def edit_zone(item_id:int,body:ZoneIn,user=Depends(administrator),db:Session=Depends(session)): row=db.get(Zone,item_id) or (_ for _ in ()).throw(HTTPException(404,"Zone not found"));[setattr(row,k,v) for k,v in body.model_dump().items()];audit(db,user["sub"],"zone.update","zone",item_id,new=body.model_dump());db.commit();return {"id":row.id,**body.model_dump()}
+@router.delete("/settings/zones/{item_id}",status_code=204)
+def delete_zone(item_id:int,user=Depends(administrator),db:Session=Depends(session)):
+    row=db.get(Zone,item_id)
+    if not row: raise HTTPException(404,"Zone not found")
+    if db.scalar(select(func.count(InventoryDevice.id)).where(InventoryDevice.zone_id==item_id)): raise HTTPException(409,"Zone is assigned to devices; disable it or reassign devices first")
+    audit(db,user["sub"],"zone.delete","zone",item_id,old={"zone_code":row.zone_code});db.delete(row);db.commit()
 
 
 @router.get("/settings/device-types")
@@ -265,6 +271,13 @@ def add_type(body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(se
 def edit_type(item_id:int,body:DeviceTypeIn,user=Depends(administrator),db:Session=Depends(session)):
     if body.type_code in ("AP","WAP"): raise HTTPException(422,"Wireless access points must be imported through Access Point Inventory")
     row=db.get(InventoryDeviceType,item_id) or (_ for _ in ()).throw(HTTPException(404,"Device type not found"));[setattr(row,k,v) for k,v in body.model_dump().items()];audit(db,user["sub"],"device_type.update","device_type",item_id,new=body.model_dump());db.commit();return {"id":row.id,**body.model_dump()}
+@router.delete("/settings/device-types/{item_id}",status_code=204)
+def delete_type(item_id:int,user=Depends(administrator),db:Session=Depends(session)):
+    row=db.get(InventoryDeviceType,item_id)
+    if not row: raise HTTPException(404,"Device type not found")
+    if row.type_code in ("AP","WAP"): raise HTTPException(422,"Wireless access points are managed in Access Point Inventory")
+    if db.scalar(select(func.count(InventoryDevice.id)).where(InventoryDevice.device_type_id==item_id)): raise HTTPException(409,"Device type is assigned to devices; disable it or reassign devices first")
+    audit(db,user["sub"],"device_type.delete","device_type",item_id,old={"type_code":row.type_code});db.delete(row);db.commit()
 
 
 @router.post("/inventory/preview-name")
