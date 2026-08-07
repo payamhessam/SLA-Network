@@ -242,7 +242,7 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
             "critical_devices": incidents, "degraded_devices": degraded,
             "criticality": max((m["band"] for m in members), key=lambda b: {"Critical": 3, "High": 2, "Standard": 1}[b]),
             "status": worst,
-            "since": _month_label(avail.get("first_observed")),
+            "since": _since_label(avail, ref),
             "reason": _commission_reason(avail, ref),
         })
     return rows
@@ -257,6 +257,16 @@ def _month_label(iso: str | None) -> str | None:
         return d.strftime("%b %Y")
     except ValueError:
         return None
+
+
+def _since_label(agg: dict, ref: date) -> str | None:
+    """Only label a 'since <month>' when the *entire* group's data starts after Jan 1
+    (a wholly new site/unit). Mixed groups (some devices since Jan) rely on the reason
+    note instead, so the headline figure isn't mistaken for a partial year."""
+    first = agg.get("first_observed")
+    if first and date.fromisoformat(first) > date(ref.year, 1, 1):
+        return _month_label(first)
+    return None
 
 
 def _commission_reason(agg: dict, ref: date) -> str | None:
@@ -302,7 +312,7 @@ def business_units(db: Session, fleet: list[dict]) -> list[dict]:
             "availability_ytd": avail["availability"], "availability_30d": avail30["availability"],
             "coverage": avail["coverage"], "incidents": incidents, "degraded": degraded,
             "status": status,
-            "since": _month_label(avail.get("first_observed")),
+            "since": _since_label(avail, ref),
             "reason": _commission_reason(avail, ref),
         })
     return sorted(rows, key=lambda r: r["devices"], reverse=True)
