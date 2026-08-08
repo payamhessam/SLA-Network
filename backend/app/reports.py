@@ -501,9 +501,9 @@ def executive_pptx(db: Session) -> Path:
     # ---- Slide 1: cover ----
     s = prs.slides.add_slide(blank)
     _rect(s, 0, 0, 13.333, 7.5, _BRAND, rounded=False)
-    _rect(s, 0, 0, 3.1, 3.2, RGBColor(0x1A, 0x52, 0xB0), rounded=False)
-    _rect(s, -1.0, 5.2, 5.0, 3.0, RGBColor(0x1A, 0x52, 0xB0), rounded=False)
-    _text(s, 0.9, 0.7, 3, 0.6, "MEDLINE", 26, _WHITE, bold=True)
+    logo = Path(__file__).parent / "medline-logo.jpg"
+    if logo.exists():
+        s.shapes.add_picture(str(logo), Inches(0.8), Inches(0.7), height=Inches(1.9))
     _text(s, 5.2, 2.2, 7.4, 1.6, "Network SLA\nExecutive Report", 38, _WHITE, bold=True)
     _text(s, 5.25, 4.05, 8, 0.35, f"{h['org']}   |   Reliability & Service-Level Performance", 14, RGBColor(0xD9, 0xEA, 0xFB), bold=True)
     _text(s, 5.25, 4.5, 8, 0.3, f"Generated {stamp} UTC  ·  Week-to-date and Year-to-date", 12, RGBColor(0xBE, 0xD3, 0xF2))
