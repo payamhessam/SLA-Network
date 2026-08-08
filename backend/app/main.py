@@ -10,7 +10,9 @@ only outbound traffic to LogicMonitor is read-only, signed GET requests.
 import asyncio, csv, io, logging, re, time, uuid
 from contextlib import suppress
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
+from pydantic import BaseModel
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -22,7 +24,7 @@ from slowapi.util import get_remote_address
 from .auth import administrator, authenticate, current_user, issue_token
 from .collection import collect_logicmonitor_device
 from .config import get_settings
-from .db import AuditEvent, Base, Device, SessionLocal, Snapshot, engine, session
+from .db import AuditEvent, Base, Device, SessionLocal, Snapshot, SshFacts, engine, session
 from .logicmonitor import LogicMonitorClient, match_device
 from .inventory import router as inventory_router, seed_inventory
 from .access_points import router as access_point_router, ap_status_loop
@@ -30,7 +32,7 @@ from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
 from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
-from . import overview, reports, resilience, sla, telemetry, trends
+from . import overview, reports, resilience, sla, ssh_collect, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
@@ -149,9 +151,85 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
             rows = [{"24h Availability": ping.get("availability_24h"), "7d Availability": "Baseline pending", "Loss %": ping.get("loss"), "Min Latency": ping.get("min"), "Avg Latency": ping.get("average"), "Max Latency": ping.get("max"), "P95 Latency": ping.get("p95"), "Jitter": "Not monitored", "Probe Count": "Not available from LogicMonitor", "Trend": "Baseline pending"}]
         elif name == "Monitoring Gaps" and latest:
             missing = [x for x in ("VLANs", "Spanning Tree", "Alerts") if not latest.details.get("tables", {}).get(x)]
-            rows = [{"Metric": x, "Reason": "No applied LogicMonitor DataSource mapping", "Recommended Action": "Review Mapping and Coverage; do not use direct device access"} for x in missing]
+            rows = [{"Metric": x, "Reason": "No applied LogicMonitor DataSource mapping", "Recommended Action": "Admin can pull directly via read-only SSH"} for x in missing]
         tables.append({"name": name, "columns": columns, "rows": rows, "evidence_status": "Available" if rows else ("Collection failed" if item.match_status == "Collection failed" else "Not available from LogicMonitor")})
-    return {"device": DeviceOut.model_validate(item), "tables": tables, "source": "LogicMonitor read-only API"}
+
+    # Overlay any admin-pulled SSH facts (kept until the next SSH push) onto the tables.
+    facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id))
+    ssh_meta = None
+    if facts and facts.data:
+        ssh_tables = facts.data.get("tables", {})
+        by_name = {t["name"]: t for t in tables}
+        # Enrich interface rows (VLAN / duplex / speed / type) by interface name.
+        if_status = ssh_tables.get("_if_status", {})
+        if if_status and by_name.get("Interfaces", {}).get("rows"):
+            for row in by_name["Interfaces"]["rows"]:
+                enr = if_status.get(row.get("Interface"))
+                if enr:
+                    for col in ("Description", "Status", "VLAN", "Duplex", "Speed", "Type"):
+                        cur = row.get(col)
+                        if enr.get(col) and (cur is None or str(cur).strip() == "" or str(cur).lower().startswith("not ")):
+                            row[col] = enr[col]
+        # Overlay empty LM tables and append SSH-only tables.
+        for name, rows in ssh_tables.items():
+            if name == "_if_status":
+                continue
+            if name in by_name:
+                if not by_name[name]["rows"]:
+                    by_name[name]["rows"] = rows
+                    by_name[name]["evidence_status"] = "Pulled via SSH"
+                    by_name[name]["source"] = "ssh"
+            else:
+                tables.append({"name": name, "columns": list(rows[0].keys()) if rows else [], "rows": rows,
+                               "evidence_status": "Pulled via SSH", "source": "ssh"})
+        # Drop monitoring-gap rows that SSH has since filled.
+        gaps = by_name.get("Monitoring Gaps")
+        if gaps:
+            gaps["rows"] = [g for g in gaps["rows"] if not (by_name.get(g.get("Metric"), {}) or {}).get("rows")]
+        ssh_meta = {"collected_at": facts.collected_at.isoformat() if facts.collected_at else None,
+                    "collected_by": facts.collected_by, "status": facts.status, "has_config": bool(facts.data.get("config"))}
+    return {"device": DeviceOut.model_validate(item), "tables": tables, "source": "LogicMonitor read-only API", "ssh": ssh_meta}
+
+
+class SshRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/v1/devices/{device_id}/ssh-collect")
+def ssh_collect_device(device_id: int, body: SshRequest, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: pull LogicMonitor gaps directly from the device over READ-ONLY SSH
+    (fixed `show`-command allow-list). Username is fixed to pa-phessamfar; the target IP is
+    the device's Management IP; the password is used for one session and never stored."""
+    item = db.get(Device, device_id)
+    if not item:
+        raise HTTPException(404, "Device not found")
+    host = item.management_ip
+    if not host:
+        return {"status": "no_ip", "message": "This device has no Management IP on record, so SSH cannot be attempted."}
+    result = ssh_collect.collect(host, "pa-phessamfar", body.password)
+    outcome = result.get("status")
+    db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.ssh_collect", target=f"device:{device_id}",
+                      details={"host": host, "result": outcome}))  # never logs the password
+    if outcome != "ok":
+        db.commit()
+        return {"status": outcome, "message": result.get("message")}
+    facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id)) or SshFacts(device_id=device_id)
+    facts.host = host; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
+    facts.collected_at = datetime.now(timezone.utc); facts.data = result["data"]
+    db.add(facts); db.commit()
+    return {"status": "ok", "collected_at": facts.collected_at.isoformat(), "collected_by": facts.collected_by,
+            "tables": {k: v for k, v in result["data"]["tables"].items() if k != "_if_status"},
+            "has_config": bool(result["data"].get("config"))}
+
+
+@app.get("/api/v1/devices/{device_id}/ssh-config")
+def ssh_config(device_id: int, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: the running-config text pulled by the last SSH collection (read-only)."""
+    facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id))
+    cfg = (facts.data or {}).get("config") if facts else None
+    if not cfg:
+        raise HTTPException(404, "No SSH-collected running-config available")
+    return {"config": cfg, "collected_at": facts.collected_at.isoformat() if facts.collected_at else None}
 
 
 @app.post("/api/v1/devices", response_model=DeviceOut, status_code=201)

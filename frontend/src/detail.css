@@ -116,3 +116,19 @@
 @media(max-width:520px){
   .dv-ribbon{grid-template-columns:1fr}
 }
+
+/* SSH direct-collection: banner, modal, config viewer */
+.dv-ssh-banner{display:flex;align-items:center;gap:10px;margin:0 0 18px;padding:10px 14px;border:1px solid var(--ds-line);border-left:3px solid var(--ds-accent);border-radius:6px;background:var(--ds-accent-weak);color:var(--dv-on);font-size:13px}
+.dv-ssh-banner span{flex:1}
+.dv-modal-back{position:fixed;inset:0;background:rgba(4,12,20,.55);display:grid;place-items:center;z-index:90;padding:20px}
+.dv-modal{background:var(--dv-surface);border:1px solid var(--ds-line);border-radius:10px;padding:22px;width:min(460px,94vw);color:var(--dv-on);box-shadow:var(--ds-shadow-pop)}
+.dv-modal.dv-modal-wide{width:min(900px,94vw)}
+.dv-modal h2{margin:0 0 6px;font-size:18px}
+.dv-modal-sub{margin:0 0 16px;color:var(--dv-on-variant);font-size:13px;line-height:1.5}
+.dv-modal-sub code{font-family:var(--dv-mono);background:var(--dv-surface-high);padding:1px 5px;border-radius:3px}
+.dv-modal-label{display:block;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--dv-on-variant);margin-bottom:6px}
+.dv-modal-input{width:100%;padding:10px 12px;background:var(--dv-surface-low);border:1px solid var(--ds-line-strong);border-radius:6px;color:var(--dv-on);font-size:14px}
+.dv-modal-input:focus{outline:none;border-color:var(--ds-accent);box-shadow:var(--ds-focus)}
+.dv-ssh-err{margin:12px 0 0;color:var(--dv-crit);font-size:13px}
+.dv-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+.dv-config{max-height:60vh;overflow:auto;background:var(--dv-surface-low);border:1px solid var(--ds-line);border-radius:6px;padding:14px;font-family:var(--dv-mono);font-size:12px;line-height:1.5;color:var(--dv-on);white-space:pre;margin:0}

@@ -244,6 +244,23 @@ class WanRouter(Base):
     created_by: Mapped[str] = mapped_column(String(120), default="")
 
 
+class SshFacts(Base):
+    """Data pulled directly from a device over read-only SSH (admin, on-demand).
+
+    A per-device overlay used to fill the gaps LogicMonitor cannot (VLANs, interface
+    duplex/speed, neighbours, inventory, routing, running-config). It is stored verbatim
+    and shown on the device detail until an administrator pushes the SSH button again.
+    The SSH password is NEVER stored here — only the collected results and metadata."""
+    __tablename__ = "ssh_facts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    device_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    host: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(40), default="")
+    collected_by: Mapped[str] = mapped_column(String(120), default="")
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 database_url = get_settings().database_url
 engine = create_engine(database_url, pool_pre_ping=True, **({"connect_args":{"check_same_thread":False},"poolclass":StaticPool} if database_url.startswith("sqlite") else {"pool_size":12,"max_overflow":24,"pool_timeout":30}))
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
