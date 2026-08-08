@@ -300,7 +300,7 @@ function SlaPage({role}:{role:string}){
   if(!data)return <section className="panel">Loading SLA…</section>;
   const r=data.resilience||{};
   const fmt=(w:any)=>w&&w.availability!=null?w.availability.toFixed(3)+'%':(w?.status||'—');
-  const backfill=async()=>{setBusy(true);setMsg('Backfilling availability history from LogicMonitor… this can take a while.');try{const res=await api('/sla/backfill',{method:'POST'});setMsg(`Backfill complete for ${res.devices} device(s) (${res.start} → ${res.end}).`);load()}catch(x:any){setMsg(x.message)}finally{setBusy(false)}};
+  const backfill=async()=>{setBusy(true);setMsg('Starting backfill…');try{await api('/sla/backfill',{method:'POST'});const poll=async()=>{try{const st=await api('/sla/backfill/status');if(st.running){setMsg('Backfilling availability history from LogicMonitor… this runs in the background and can take a few minutes.');setTimeout(poll,8000)}else{if(st.error){setMsg('Backfill failed: '+st.error+'. Check server logs.')}else if(st.result){setMsg(`Backfill complete for ${st.result.devices} device(s) (${st.result.start} → ${st.result.end}).`);load()}else{setMsg('Backfill finished.');load()}setBusy(false)}}catch(x:any){setMsg('Lost status connection: '+x.message);setBusy(false)}};setTimeout(poll,2000)}catch(x:any){setMsg(x.message);setBusy(false)}};
   return <>
     <section className="cards">
       <article><span>Fleet YTD availability<Help text="Fleet-wide year-to-date availability = up eligible minutes / observed eligible minutes across every mapped switch, coverage-gated at 90%. 'Insufficient' means not enough evidence yet — it is never shown as 0%."/></span><strong>{fmt(data.fleet_ytd)}</strong><small>Target {data.target}% · coverage {data.fleet_ytd.coverage.toFixed(1)}%</small></article>

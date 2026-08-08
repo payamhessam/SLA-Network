@@ -445,9 +445,38 @@ def sla_resilience(user=Depends(current_user), db:Session=Depends(session)):
     return resilience.latest_assessment(db)
 
 
+# Manual backfill runs in the background (it can take minutes across the fleet) so the HTTP
+# request returns immediately and the UI polls for status instead of timing out at the proxy.
+_backfill_state = {"running": False, "result": None, "error": None, "started_at": None, "finished_at": None}
+
+
+async def _run_backfill_job(actor: str):
+    _backfill_state.update(running=True, result=None, error=None,
+                           started_at=datetime.now(timezone.utc).isoformat(), finished_at=None)
+    try:
+        result = await sla.backfill_all(force=False)
+        await resilience.run_assessment()
+        with SessionLocal() as db:
+            audit(db, actor, "sla.backfill", "LogicMonitor", {"devices": result["devices"]}); db.commit()
+        _backfill_state["result"] = result
+    except Exception as exc:
+        _backfill_state["error"] = type(exc).__name__
+        logging.getLogger("backfill").exception("Manual backfill failed")
+    finally:
+        _backfill_state["running"] = False
+        _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
 @app.post("/api/v1/sla/backfill")
-async def sla_backfill(user=Depends(administrator), db:Session=Depends(session)):
-    result = await sla.backfill_all(force=False)
-    await resilience.run_assessment()
-    audit(db, user["sub"], "sla.backfill", "LogicMonitor", {"devices":result["devices"]}); db.commit()
-    return result
+async def sla_backfill(user=Depends(administrator)):
+    """Admin-only: start a fleet SLA backfill + resilience reassessment in the background.
+    Returns immediately; poll GET /sla/backfill/status for progress."""
+    if _backfill_state["running"]:
+        return {"status": "already_running", "started_at": _backfill_state["started_at"]}
+    asyncio.create_task(_run_backfill_job(user["sub"]))
+    return {"status": "started"}
+
+
+@app.get("/api/v1/sla/backfill/status")
+def sla_backfill_status(user=Depends(administrator)):
+    return _backfill_state
