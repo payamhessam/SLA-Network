@@ -302,12 +302,25 @@ def fleet_sla(db: Session) -> dict:
     ys, ye = _window_bounds("ytd", ref)
     ws, we = _window_bounds("wtd", ref)
     below = 0
+    # Load every device's YTD rows (WTD is a subset) in ONE query, then window in memory.
+    dev_ids = [d.id for d in devices]
+    by_dev: dict[int, list[SlaDaily]] = {}
+    if dev_ids:
+        for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(dev_ids), SlaDaily.day >= ys, SlaDaily.day <= ye)).all():
+            by_dev.setdefault(r.device_id, []).append(r)
+
+    def _win(rows, start, end):
+        agg = _aggregate([r for r in rows if start <= r.day <= end])
+        agg["start"] = start.isoformat(); agg["end"] = end.isoformat()
+        return agg
+
     for d in devices:
-        dw = window(db, d.id, ws, we)
-        dy = window(db, d.id, ys, ye)
+        drows = by_dev.get(d.id, [])
+        dy = _win(drows, ys, ye)
+        dw = _win(drows, ws, we)
         entries.append({"device_id": d.id, "lm_device_id": d.lm_device_id, "hostname": d.hostname, "site": d.site, "wtd": dw, "ytd": dy})
-        ytd_rows += db.scalars(select(SlaDaily).where(SlaDaily.device_id == d.id, SlaDaily.day >= ys, SlaDaily.day <= ye)).all()
-        wtd_rows += db.scalars(select(SlaDaily).where(SlaDaily.device_id == d.id, SlaDaily.day >= ws, SlaDaily.day <= we)).all()
+        ytd_rows += drows
+        wtd_rows += [r for r in drows if ws <= r.day <= we]
         if dy["availability"] is not None and dy["availability"] < target:
             below += 1
     fleet_ytd = _aggregate(ytd_rows)

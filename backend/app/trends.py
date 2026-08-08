@@ -17,10 +17,14 @@ def _fleet_ids(db: Session) -> list[int]:
     return [d["device_id"] for d in overview._fleet(db) if d["device_id"]]
 
 
-def availability_trend(db: Session, weeks: int = 12) -> dict:
+def _ids(db, fleet):
+    return [d["device_id"] for d in (fleet if fleet is not None else overview._fleet(db)) if d["device_id"]]
+
+
+def availability_trend(db: Session, weeks: int = 12, fleet=None) -> dict:
     """Weekly fleet availability against the SLA target, for the compliance-trend chart."""
     target = get_settings().sla_target
-    ids = _fleet_ids(db)
+    ids = _ids(db, fleet)
     ref = sla.today_local()
     this_monday = ref - timedelta(days=ref.weekday())  # weeks start Monday, local tz
     series = []
@@ -48,9 +52,9 @@ def _trend_label(delta):
     return "UNCHANGED"
 
 
-def deltas(db: Session) -> dict:
+def deltas(db: Session, fleet=None) -> dict:
     """Week-over-week and month-over-month availability change for the fleet."""
-    ids = _fleet_ids(db)
+    ids = _ids(db, fleet)
     ref = sla.today_local()
 
     def win(start, end):
@@ -70,7 +74,7 @@ def deltas(db: Session) -> dict:
     }
 
 
-def incidents(db: Session, days: int = 90) -> list[dict]:
+def incidents(db: Session, days: int = 90, fleet=None) -> list[dict]:
     """Derive incidents from contiguous below-100%-availability days per device (coverage-gated).
 
     Note: this is availability-derived, not a discrete event log — LogicMonitor alert history
@@ -79,11 +83,17 @@ def incidents(db: Session, days: int = 90) -> list[dict]:
     settings = get_settings()
     ref = sla.today_local()
     start = ref - timedelta(days=days - 1)
+    fleet = fleet if fleet is not None else overview._fleet(db)
+    ids = [d["device_id"] for d in fleet if d["device_id"]]
+    by_dev: dict[int, list[SlaDaily]] = {}
+    if ids:  # one query for the whole window, then group per device
+        for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(ids), SlaDaily.day >= start, SlaDaily.day <= ref).order_by(SlaDaily.day)).all():
+            by_dev.setdefault(r.device_id, []).append(r)
     out = []
-    for d in overview._fleet(db):
+    for d in fleet:
         if not d["device_id"]:
             continue
-        rows = db.scalars(select(SlaDaily).where(SlaDaily.device_id == d["device_id"], SlaDaily.day >= start, SlaDaily.day <= ref).order_by(SlaDaily.day)).all()
+        rows = by_dev.get(d["device_id"], [])
         run = None
         for r in rows:
             bad = r.coverage >= settings.coverage_threshold and r.availability is not None and r.availability < 100.0
@@ -101,12 +111,13 @@ def incidents(db: Session, days: int = 90) -> list[dict]:
     return out
 
 
-def mttr_mtbf(db: Session, days: int = 90) -> dict:
+def mttr_mtbf(db: Session, days: int = 90, inc=None, fleet=None) -> dict:
     """Approximate fleet MTTR/MTBF from availability-derived incidents (labelled as derived)."""
-    inc = incidents(db, days)
+    fleet = fleet if fleet is not None else overview._fleet(db)
+    inc = inc if inc is not None else incidents(db, days, fleet)
     total_down = sum(i["down"] for i in inc)
     n = len(inc)
-    fleet_n = len(overview._fleet(db))
+    fleet_n = len(fleet)
     period_min = days * 24 * 60
     return {
         "incidents": n, "window_days": days, "total_downtime_minutes": total_down,
@@ -117,9 +128,11 @@ def mttr_mtbf(db: Session, days: int = 90) -> dict:
 
 
 def build(db: Session) -> dict:
+    fleet = overview._fleet(db)  # compute the fleet once and thread it through
+    inc = incidents(db, fleet=fleet)
     return {
-        "availability_trend": availability_trend(db),
-        "deltas": deltas(db),
-        "incidents": incidents(db)[:25],
-        "mttr_mtbf": mttr_mtbf(db),
+        "availability_trend": availability_trend(db, fleet=fleet),
+        "deltas": deltas(db, fleet=fleet),
+        "incidents": inc[:25],
+        "mttr_mtbf": mttr_mtbf(db, inc=inc, fleet=fleet),
     }
