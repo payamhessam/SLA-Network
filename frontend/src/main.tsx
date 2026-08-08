@@ -186,7 +186,7 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
   const num=(v:any)=>typeof v==='number'&&isFinite(v)?v:(typeof v==='string'&&v.trim()!==''&&!isNaN(Number(v))?Number(v):null);
   const missingText=(v:any)=>typeof v==='string'&&/not available|not monitored|not collected|baseline pending|insufficient/i.test(v);
   const fmtPct=(v:any)=>{const n=num(v);return n==null?'N/A':`${Math.round(n)}%`};
-  const fmtUptime=(v:any)=>{const n=num(v);return n==null?'N/A':`${n.toLocaleString()}s`};
+  const fmtUptime=(v:any)=>{const n=num(v);if(n==null)return'N/A';const d=Math.floor(n/86400),h=Math.floor((n%86400)/3600);return d>0?`${d}d ${h}h`:`${h}h ${Math.floor((n%3600)/60)}m`};
   const clean=(v:any)=>v&&!missingText(v)?String(v):'N/A';
   const availability=(()=>{const n=num(ping['24h Availability']);return n==null?null:Math.max(0,Math.min(100,Math.round(n)))})();
   const metrics=[
