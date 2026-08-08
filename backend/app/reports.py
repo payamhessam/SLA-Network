@@ -7,6 +7,7 @@ follows the Medline executive template: a deep-blue (#003DA5) brand banner, whit
 cards with large navy values and colour-coded status, an executive readout with status
 chips, and a per-site availability bar chart. Read-only (no LogicMonitor write access).
 """
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,10 +19,12 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.util import Inches, Pt
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import overview, resilience, sla, telemetry, trends
 from .config import get_settings
+from .db import SlaDaily
 
 # ---- Medline executive palette (hex for Excel, RGBColor for PowerPoint) ----
 BRAND = "003DA5"   # Medline blue — banners / brand
@@ -76,6 +79,112 @@ def _snapshot(db: Session) -> dict:
             "trends": trends.build(db), "resilience": resilience.latest_assessment(db)}
 
 
+def _mlabel(iso):
+    try:
+        return datetime.fromisoformat(iso).strftime("%b %Y") if iso else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _agg_metrics(rows, target):
+    """Availability + SLA-budget metrics for a set of daily rows. 'Budget consumed' is the
+    share of the ALLOWED downtime that was actually used — the metric that matters for
+    SLA-based payments (over 100% means the SLA was breached)."""
+    a = sla._aggregate(rows)
+    observed, up = a["observed_minutes"], a["up_minutes"]
+    down = max(0, observed - up)
+    allowed = observed * (1 - target / 100.0)
+    return {"availability": a["availability"], "coverage": a["coverage"], "observed": observed, "up": up,
+            "down": down, "budget_pct": (round(100.0 * down / allowed, 1) if allowed > 0 else None),
+            "first_observed": a.get("first_observed")}
+
+
+def report_model(db: Session) -> dict:
+    """One rich, executive-grade SLA dataset shared by the Excel and PowerPoint reports:
+    fleet + business-unit + per-branch WTD/YTD availability, SLA compliance vs target,
+    downtime-budget consumed, incidents (per branch and per month), and MTTR — everything a
+    non-technical leader needs to compare branches and settle SLA-linked payments."""
+    settings = get_settings(); target = settings.sla_target
+    ref = sla.today_local()
+    ys, ye = sla._window_bounds("ytd", ref); ws, we = sla._window_bounds("wtd", ref)
+    d30s, d30e = sla._window_bounds("rolling_30", ref)
+    fleet = overview._fleet(db)
+    ids = [d["device_id"] for d in fleet if d["device_id"]]
+    by_dev = defaultdict(list)
+    if ids:
+        for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(ids), SlaDaily.day >= ys, SlaDaily.day <= ye)).all():
+            by_dev[r.device_id].append(r)
+
+    def win(dev_ids, s, e):
+        return _agg_metrics([r for did in dev_ids for r in by_dev.get(did, []) if s <= r.day <= e], target)
+
+    inc = trends.incidents(db, fleet=fleet)
+    by_city = defaultdict(lambda: {"count": 0, "down": 0})
+    for i in inc:
+        by_city[i["city"]]["count"] += 1; by_city[i["city"]]["down"] += i["down"]
+
+    # per-branch (site) scorecard
+    site_groups = defaultdict(list)
+    for d in fleet:
+        site_groups[d["site_code"] or d["city"]].append(d)
+    branches = []
+    for members in site_groups.values():
+        first = members[0]; did = [m["device_id"] for m in members if m["device_id"]]
+        wtd, ytd = win(did, ws, we), win(did, ys, ye)
+        ci = by_city.get(first["city"], {"count": 0, "down": 0})
+        branches.append({
+            "site_code": first["site_code"], "city": first["city"], "province": first["province"], "unit": first["business_unit"],
+            "devices": sum(m["physical"] for m in members), "wtd": wtd["availability"], "ytd": ytd["availability"], "target": target,
+            "met_wtd": wtd["availability"] is not None and wtd["availability"] >= target,
+            "met_ytd": ytd["availability"] is not None and ytd["availability"] >= target,
+            "down_ytd_min": ytd["down"], "budget_pct": ytd["budget_pct"], "incidents": ci["count"],
+            "mttr": (round(ci["down"] / ci["count"]) if ci["count"] else None), "since": _mlabel(ytd["first_observed"]),
+        })
+    branches.sort(key=lambda b: (b["ytd"] is None, -(b["ytd"] or 0)))
+    for i, b in enumerate(branches, 1):
+        b["rank"] = i
+
+    # business units (Healthcare vs Dental)
+    unit_groups = defaultdict(list)
+    for d in fleet:
+        unit_groups[d["business_unit"] or "Unassigned"].append(d)
+    units = []
+    for name, members in unit_groups.items():
+        did = [m["device_id"] for m in members if m["device_id"]]
+        wtd, ytd = win(did, ws, we), win(did, ys, ye)
+        cities = {m["city"] for m in members}
+        ui = sum(by_city.get(c, {"count": 0})["count"] for c in cities)
+        ud = sum(by_city.get(c, {"down": 0})["down"] for c in cities)
+        units.append({"name": name, "wtd": wtd["availability"], "ytd": ytd["availability"], "devices": sum(m["physical"] for m in members),
+                      "sites": len({m["site_code"] or m["city"] for m in members}), "incidents": ui,
+                      "mttr": (round(ud / ui) if ui else None), "budget_pct": ytd["budget_pct"],
+                      "met_ytd": ytd["availability"] is not None and ytd["availability"] >= target})
+    units.sort(key=lambda u: -u["devices"])
+
+    # incidents per month (last 6)
+    per_month = defaultdict(lambda: {"count": 0, "down": 0})
+    for i in inc:
+        per_month[i["start"][:7]]["count"] += 1; per_month[i["start"][:7]]["down"] += i["down"]
+    months = sorted(per_month)[-6:]
+    inc_month = [{"month": m, "count": per_month[m]["count"], "down": per_month[m]["down"]} for m in months]
+
+    f_wtd, f_ytd = win(ids, ws, we), win(ids, ys, ye)
+    crit_ids = [d["device_id"] for d in fleet if d["band"] == "Critical" and d["device_id"]]
+    return {
+        "target": target, "stamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        "ytd_start": ys.isoformat(), "wtd_start": ws.isoformat(), "as_of": ref.isoformat(),
+        "fleet": {"wtd": f_wtd["availability"], "ytd": f_ytd["availability"], "budget_pct": f_ytd["budget_pct"],
+                   "down_ytd_min": f_ytd["down"], "met_wtd": f_wtd["availability"] is not None and f_wtd["availability"] >= target,
+                   "met_ytd": f_ytd["availability"] is not None and f_ytd["availability"] >= target},
+        "units": units, "branches": branches, "incidents_month": inc_month,
+        "weekly": trends.availability_trend(db, fleet=fleet)["series"],
+        "mttr_mtbf": trends.mttr_mtbf(db, inc=inc, fleet=fleet), "deltas": trends.deltas(db, fleet=fleet),
+        "branches_met": sum(1 for b in branches if b["met_ytd"]),
+        "branches_missed": sum(1 for b in branches if b["ytd"] is not None and not b["met_ytd"]),
+        "critical": (win(crit_ids, ys, ye) if crit_ids else None), "critical_devices": len(crit_ids),
+    }
+
+
 def _readout(o: dict, tr: dict) -> list:
     """Executive-readout action rows (priority / risk / business impact / recommendation)."""
     rows = []
@@ -92,8 +201,8 @@ _THIN = Side(style="thin", color=LINE)
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
 
-def _dashboard_sheet(wb, o, tr, stamp):
-    """The Executive Dashboard cover: brand banner, 4 KPI tiles, and a readout table."""
+def _dashboard_sheet(wb, o, tr, m, stamp):
+    """The Executive Dashboard cover: brand banner, 6 KPI tiles, and a readout table."""
     ws = wb.create_sheet("Executive Dashboard")
     ws.sheet_view.showGridLines = False
     for col in range(1, 13):
@@ -117,27 +226,30 @@ def _dashboard_sheet(wb, o, tr, stamp):
     for r in (1, 2, 3, 4):
         ws.row_dimensions[r].height = 20
 
-    # KPI tiles (4)
+    # KPI tiles (6, two columns each)
+    fl = m["fleet"]; bud = fl["budget_pct"]
     tiles = [
-        ("Network SLA (30-day)", _pct(g["current"]), g["status"]),
-        ("SLA Target", f"{g['target']}%", "Objective"),
-        ("YTD Availability", _pct(g["ytd"]), "Above target" if isinstance(g["ytd"], (int, float)) and g["ytd"] >= g["target"] else "Tracking"),
-        ("Incidents (90d)", str(tr["mttr_mtbf"]["incidents"]), "Availability-derived"),
+        ("Network SLA — This Week", _pct(fl["wtd"]), "Target met" if fl["met_wtd"] else "Below target"),
+        ("Network SLA — Year to Date", _pct(fl["ytd"]), "Target met" if fl["met_ytd"] else "Below target"),
+        ("SLA Target", f"{m['target']}%", "Objective"),
+        ("SLA Budget Used", (f"{bud}%" if bud is not None else "—"), "Within budget" if (bud is not None and bud <= 100) else "Over budget"),
+        ("Branches Meeting SLA", f"{m['branches_met']}/{len(m['branches'])}", f"{m['branches_missed']} missed"),
+        ("Incidents (90 days)", str(m["mttr_mtbf"]["incidents"]), f"MTTR {m['mttr_mtbf']['mttr_minutes']} min"),
     ]
-    starts = ["A", "D", "G", "J"]
+    starts = ["A", "C", "E", "G", "I", "K"]
     for (label, value, status), c in zip(tiles, starts):
-        c2 = get_column_letter(ord(c) - 64 + 2)  # tile spans 3 columns (c .. c+2)
+        c2 = get_column_letter(ord(c) - 64 + 1)  # tile spans 2 columns
         ws.merge_cells(f"{c}6:{c2}6"); ws.merge_cells(f"{c}7:{c2}8"); ws.merge_cells(f"{c}9:{c2}9")
-        ws[f"{c}6"] = label.upper(); ws[f"{c}6"].font = Font(size=9, bold=True, color=SLATE)
-        ws[f"{c}7"] = value; ws[f"{c}7"].font = Font(size=24, bold=True, color=NAVY)
+        ws[f"{c}6"] = label.upper(); ws[f"{c}6"].font = Font(size=8, bold=True, color=SLATE)
+        ws[f"{c}7"] = value; ws[f"{c}7"].font = Font(size=20, bold=True, color=NAVY)
         ws[f"{c}7"].alignment = Alignment("left", "center")
-        ws[f"{c}9"] = status; ws[f"{c}9"].font = Font(size=9, bold=True, color=_status_hex(status))
+        ws[f"{c}9"] = status; ws[f"{c}9"].font = Font(size=8, bold=True, color=_status_hex(status))
         for rr in (6, 7, 8, 9):
             for cc in range(ord(c) - 64, ord(c2) - 64 + 1):
                 cell = ws.cell(row=rr, column=cc)
                 cell.fill = PatternFill("solid", fgColor="FFFFFF")
                 cell.border = _BORDER
-    ws.row_dimensions[7].height = 26
+    ws.row_dimensions[7].height = 24
 
     # Executive readout narrative + action table
     ws["A11"] = "Executive Readout"; ws["A11"].font = Font(size=14, bold=True, color=NAVY)
@@ -188,52 +300,95 @@ def _table(ws, headers, rows, row=4):
         ws.auto_filter.ref = f"A{row}:{get_column_letter(len(headers))}{row + len(rows)}"
 
 
+def _met(v):
+    return "Yes" if v else "No"
+
+
+def _colored_table(ws, headers, rows, colorers, row=4):
+    """Like _table but a `colorers` dict {col_index: fn(value)->hex or None} tints cells."""
+    for c, hh in enumerate(headers, 1):
+        cell = ws.cell(row=row, column=c, value=hh)
+        cell.font = Font(size=10, bold=True, color="FFFFFF"); cell.fill = PatternFill("solid", fgColor=SLATE)
+    zebra = PatternFill("solid", fgColor=ZEBRA)
+    for r, data in enumerate(rows, row + 1):
+        for c, value in enumerate(data, 1):
+            cell = ws.cell(row=r, column=c, value=_safe(value))
+            if (r - row) % 2 == 0:
+                cell.fill = zebra
+            clr = colorers.get(c - 1, lambda v: None)(value) if colorers else None
+            if clr:
+                cell.font = Font(bold=True, color=clr)
+    for i in range(len(headers)):
+        ws.column_dimensions[get_column_letter(i + 1)].width = 16 if i else 8
+    ws.freeze_panes = ws.cell(row=row + 1, column=1)
+    if rows:
+        ws.auto_filter.ref = f"A{row}:{get_column_letter(len(headers))}{row + len(rows)}"
+
+
 def executive_excel(db: Session) -> Path:
     d = _snapshot(db)
     o, s, tel, tr = d["overview"], d["sla"], d["telemetry"], d["trends"]
+    m = report_model(db)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
     folder = Path(get_settings().report_dir); folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"Executive_Reliability_{stamp}.xlsx"
     wb = Workbook(); wb.remove(wb.active)
+    met_color = lambda v: (GREEN if v == "Yes" else RED)
 
-    _dashboard_sheet(wb, o, tr, stamp)
+    _dashboard_sheet(wb, o, tr, m, stamp)
 
-    ws = _sheet(wb, "Business Units", "Fleet reliability rolled up by business unit")
-    _table(ws, ["Business Unit", "Availability YTD", "30-Day", "Devices", "Sites", "Incidents", "Status"],
-           [(b["business_unit"], _pct(b["availability_ytd"]), _pct(b["availability_30d"]), b["devices"], b["sites"], b["incidents"], b["status"]) for b in o.get("business_units", [])])
+    # ---- Branch SLA Scorecard — the payment-relevant leaderboard ----
+    ws = _sheet(wb, "Branch SLA Scorecard", "Every branch ranked by year-to-date availability. 'Met SLA' compares against the target. 'Budget Used' is the share of the allowed downtime consumed (over 100% = breach).")
+    _colored_table(ws, ["Rank", "Branch", "City", "Business Unit", "This Week", "Year to Date", "Target", "Met SLA (WTD)", "Met SLA (YTD)", "Downtime YTD (min)", "SLA Budget Used", "Incidents", "Avg Resolve (min)"],
+                   [(b["rank"], b["site_code"], b["city"] + (f" · since {b['since']}" if b.get("since") else ""), b["unit"],
+                     _pct(b["wtd"]), _pct(b["ytd"]), f"{b['target']}%", _met(b["met_wtd"]), _met(b["met_ytd"]),
+                     b["down_ytd_min"], (f"{b['budget_pct']}%" if b["budget_pct"] is not None else "—"), b["incidents"],
+                     (b["mttr"] if b["mttr"] is not None else "—")) for b in m["branches"]],
+                   {7: met_color, 8: met_color})
 
+    # ---- Healthcare vs Dental ----
+    ws = _sheet(wb, "Healthcare vs Dental", "How the two business units compare on reliability, SLA budget and incidents.")
+    _colored_table(ws, ["Business Unit", "This Week", "Year to Date", "Target", "Met SLA (YTD)", "SLA Budget Used", "Devices", "Sites", "Incidents (90d)", "Avg Resolve (min)"],
+                   [(u["name"], _pct(u["wtd"]), _pct(u["ytd"]), f"{m['target']}%", _met(u["met_ytd"]),
+                     (f"{u['budget_pct']}%" if u["budget_pct"] is not None else "—"), u["devices"], u["sites"], u["incidents"],
+                     (u["mttr"] if u["mttr"] is not None else "—")) for u in m["units"]],
+                   {4: met_color})
+
+    # ---- Weekly Trend ----
+    ws = _sheet(wb, "Weekly Trend", "Fleet availability and downtime, week by week (last 12 weeks).")
+    _table(ws, ["Week Starting", "Availability", "Vs Target", "Downtime (min)"],
+           [(w["week_start"], _pct(w["availability"]), ("Below" if w["below_target"] else "Met"), w["downtime_minutes"]) for w in m["weekly"]])
+
+    # ---- Incidents by Month ----
+    ws = _sheet(wb, "Incidents by Month", "How many incidents were logged each month, and total downtime.")
+    _table(ws, ["Month", "Incidents", "Total Downtime (min)"], [(x["month"], x["count"], x["down"]) for x in m["incidents_month"]] or [("No incidents in range", 0, 0)])
+
+    # ---- Supporting detail ----
     ws = _sheet(wb, "SLA by Device", "Per-device WTD/YTD availability, coverage-gated")
     _table(ws, ["Device", "Site", "WTD", "YTD", "Coverage YTD"],
            [(e["hostname"], e["site"], _pct(e["wtd"]["availability"]), _pct(e["ytd"]["availability"]), f"{e['ytd']['coverage']:.1f}%") for e in s["devices"]])
 
-    ws = _sheet(wb, "Site Reliability", "Per-site availability and health")
-    _table(ws, ["Site", "City", "Province", "Business Unit", "Availability YTD", "30-Day", "Devices", "Device Health", "Incidents", "Status"],
-           [(x["site_code"], x["city"], x["province"], x["business_unit"], _pct(x["availability_ytd"]), _pct(x["availability_30d"]), x["devices"], x["device_health"], x["critical_devices"], x["status"]) for x in o["sites"]])
-
-    ws = _sheet(wb, "Routing (OSPF)", "OSPF adjacency; BGP/EIGRP/static not monitored in this tenant")
-    _table(ws, ["Device", "Site", "Full Adjacencies", "Total", "Neighbor Events", "Status"],
-           [(x["hostname"], x["city"], x["full"], x["neighbors"], x["neighbor_events"], x["status"]) for x in tel["routing"]["items"]])
-
-    ws = _sheet(wb, "Interfaces", "Fleet interface health")
-    iface = tel["interfaces"]
-    _table(ws, ["Metric", "Value"], [("Total interfaces", iface["total"]), ("Operational", iface["up"]), ("Down (admin up)", iface["down"]),
-                                      ("High utilisation", iface["high_util"]), ("With errors", iface["with_errors"]), ("Flapping", iface["flapping"])])
-
-    ws = _sheet(wb, "Incidents", "Availability-derived incidents (approximate)")
-    _table(ws, ["Device", "Site", "Start", "End", "Days", "Downtime (min)"],
-           [(x["device"], x["city"], x["start"], x["end"], x["days"], x["down"]) for x in tr["incidents"]])
+    ws = _sheet(wb, "Critical Applications", "Business-application SLAs (mapping pending). Critical-criticality infrastructure is shown as today's closest measured proxy.")
+    crit = m["critical"]
+    _table(ws, ["Item", "Measurement", "This Week / YTD", "Note"], [
+        ("Business application SLIs", "Per-application availability", "Mapping pending", "Populates when an authoritative LogicMonitor application SLI is mapped — never inferred from device health."),
+        (f"Critical infrastructure ({m['critical_devices']} devices)", "Availability YTD (proxy)", _pct(crit["availability"]) if crit else "Insufficient", "The most business-critical devices, as the closest real measurement available today."),
+    ])
 
     ws = _sheet(wb, "Data Coverage", "What LogicMonitor exposes for this fleet")
     _table(ws, ["Metric", "LogicMonitor source", "Coverage", "Devices"],
-           [(m["metric"], m["source"], m["status"], f"{m['devices']}/{tel['data_coverage']['fleet']}") for m in tel["data_coverage"]["metrics"]])
+           [(x["metric"], x["source"], x["status"], f"{x['devices']}/{tel['data_coverage']['fleet']}") for x in tel["data_coverage"]["metrics"]])
 
-    ws = _sheet(wb, "Methodology", "Definitions and scope")
-    _table(ws, ["Topic", "Definition"], [
-        ("Availability", "up eligible minutes / observed eligible minutes, coverage-gated at 90%."),
-        ("Coverage", "observed minutes / expected minutes; below 90% = Insufficient evidence (never 0%)."),
-        ("Resilience tier", "Network-redundancy estimate mapped to Uptime bands; NOT a facility certification."),
-        ("Scope", "Only devices registered in Device Fleet are analysed, not all of LogicMonitor."),
-        ("MTTR/MTBF", "Approximate, derived from availability history; exact timings need LM alert history."),
+    ws = _sheet(wb, "SLA Methodology", "How every number is measured — the basis for SLA-linked payments.")
+    _table(ws, ["Topic", "How it is measured"], [
+        ("Availability", "Up eligible minutes ÷ observed eligible minutes × 100. A minute is 'up' when the device answered at least one probe (packet loss < 100%)."),
+        ("This Week (WTD)", "Monday to now, in the configured timezone (America/Vancouver)."),
+        ("Year to Date (YTD)", "From each branch's first monitored day to now — a mid-year branch is not penalised for months it did not exist."),
+        ("Coverage gating", "If less than 90% of the expected minutes were observed, no number is published (shown as Insufficient) — never a fabricated 0% or 100%."),
+        ("SLA Budget Used", "Downtime ÷ allowed downtime × 100, where allowed downtime = observed minutes × (1 − target). Over 100% means the SLA was breached."),
+        ("Incidents / Avg Resolve", "Incidents are runs of below-100% availability days; Avg Resolve (MTTR) is total downtime ÷ number of incidents. Availability-derived and approximate."),
+        ("Scope", "Only devices registered in Device Fleet are analysed. WAN provider routers are excluded from Medline SLA."),
+        ("Target", f"The SLA target is {m['target']}% (configurable)."),
     ])
     wb.save(path)
     return path
@@ -315,134 +470,158 @@ def _bar_chart(slide, l, t, w, h, sites, target):
         _text(slide, bx - 0.1, base + 0.02, bw + 0.2, 0.25, x.get("site_code") or x.get("city", ""), 8, _SLATE, align=PP_ALIGN.CENTER)
 
 
+def _vbars(slide, l, t, w, h, data, lo, hi, target=None, valfmt=None):
+    """Simple vertical bar chart. data = list of (label, value_or_None, color_rgb)."""
+    n = max(len(data), 1); gap = 0.08; bw = (w - gap * (n + 1)) / n; base = t + h - 0.34; span = max(hi - lo, 0.001)
+    if target is not None:
+        ty = base - (h - 0.5) * (target - lo) / span
+        _rect(slide, l, ty, w, 0.02, _AMBER, rounded=False)
+    for i, (lab, val, col) in enumerate(data):
+        bx = l + gap + i * (bw + gap)
+        if isinstance(val, (int, float)):
+            bh = max(0.08, (h - 0.5) * (val - lo) / span)
+            _rect(slide, bx, base - bh, bw, bh, col, rounded=False)
+            if valfmt:
+                _text(slide, bx - 0.15, base - bh - 0.24, bw + 0.3, 0.22, valfmt(val), 7.5, _SLATE, bold=True, align=PP_ALIGN.CENTER)
+        _text(slide, bx - 0.15, base + 0.03, bw + 0.3, 0.22, lab, 7.5, _SLATE, align=PP_ALIGN.CENTER)
+
+
 def executive_pptx(db: Session) -> Path:
     d = _snapshot(db)
     o, tel, tr = d["overview"], d["telemetry"], d["trends"]
-    g, h, crit = o["global_sla"], o["header"], o["criticality"]
+    h = o["header"]
+    m = report_model(db); fl = m["fleet"]; tgt = m["target"]
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     folder = Path(get_settings().report_dir); folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"Executive_Reliability_{datetime.now(timezone.utc).strftime('%Y-%m-%d_%H%M%S')}.pptx"
     prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
     blank = prs.slide_layouts[6]
+    metchip = lambda ok: (GREEN_BG, _GREEN, "MET") if ok else (RED_BG, _RED, "MISSED")
 
     # ---- Slide 1: cover ----
     s = prs.slides.add_slide(blank)
     _rect(s, 0, 0, 13.333, 7.5, _BRAND, rounded=False)
-    _rect(s, 0, 0, 3.1, 3.2, _WHITE, rounded=False).fill.fore_color.rgb = RGBColor(0x1A, 0x52, 0xB0)
+    _rect(s, 0, 0, 3.1, 3.2, RGBColor(0x1A, 0x52, 0xB0), rounded=False)
     _rect(s, -1.0, 5.2, 5.0, 3.0, RGBColor(0x1A, 0x52, 0xB0), rounded=False)
     _text(s, 0.9, 0.7, 3, 0.6, "MEDLINE", 26, _WHITE, bold=True)
-    _text(s, 5.2, 2.3, 7.2, 1.6, "Enterprise Network\nReliability", 40, _WHITE, bold=True)
-    _text(s, 5.25, 4.15, 7, 0.35, f"{h['org']}   |   Executive SLA Report", 14, RGBColor(0xD9, 0xEA, 0xFB), bold=True)
-    _text(s, 5.25, 4.6, 6, 0.3, f"Generated {stamp} UTC", 12, RGBColor(0xBE, 0xD3, 0xF2))
+    _text(s, 5.2, 2.2, 7.4, 1.6, "Network SLA\nExecutive Report", 38, _WHITE, bold=True)
+    _text(s, 5.25, 4.05, 8, 0.35, f"{h['org']}   |   Reliability & Service-Level Performance", 14, RGBColor(0xD9, 0xEA, 0xFB), bold=True)
+    _text(s, 5.25, 4.5, 8, 0.3, f"Generated {stamp} UTC  ·  Week-to-date and Year-to-date", 12, RGBColor(0xBE, 0xD3, 0xF2))
 
     # ---- Slide 2: executive scorecard ----
     s = prs.slides.add_slide(blank)
-    verb = "met" if (isinstance(g["current"], (int, float)) and g["current"] >= g["target"]) else "at risk"
-    _header(s, "Executive Scorecard", f"36-second leadership readout — SLA is {verb}; see the readout and trend below.", "02")
-    kx = [(0.8, 2.9, "Network SLA", _pct(g["current"]), "30-day availability"),
-          (3.9, 2.2, "SLA Target", f"{g['target']}%", "contract objective"),
-          (6.3, 2.2, "Evidence Coverage", f"{h['sla_evidence_coverage']}%", "fleet telemetry"),
-          (8.7, 2.2, "Incidents", str(tr["mttr_mtbf"]["incidents"]), "90-day derived"),
-          (11.1, 1.4, "Trend", tr["deltas"]["wow"]["trend"].title(), "WoW / MoM")]
-    for l, w, lab, val, sub in kx:
-        col = _GREEN if lab == "Network SLA" and verb == "met" else (_RED if lab == "Trend" and "worsen" in val.lower() else _NAVY)
-        _kpi(s, l, 1.2, w, lab, val, sub, col)
-    # readout panel
-    _rect(s, 0.8, 2.6, 5.2, 3.8, _WHITE, line=_LINE)
-    _text(s, 1.1, 2.8, 4.6, 0.3, "Executive Readout", 14, _NAVY, bold=True)
-    _text(s, 1.1, 3.25, 4.7, 1.8, o["summary"], 11, _SLATE)
-    cx = 1.1
-    cx = _chip(s, cx, 5.9, g["status"], GREEN_BG if verb == "met" else AMBER_BG, _GREEN if verb == "met" else _AMBER)
-    cx = _chip(s, cx, 5.9, f"Trend {tr['deltas']['wow']['trend'].lower()}", RED_BG if "worsen" in tr["deltas"]["wow"]["trend"].lower() else GREEN_BG, _RED if "worsen" in tr["deltas"]["wow"]["trend"].lower() else _GREEN)
-    _chip(s, cx, 5.9, f"{h['data_quality']} quality", BLUE_BG, _BRAND)
-    # chart panel
-    _rect(s, 6.3, 2.6, 6.2, 3.8, _WHITE, line=_LINE)
-    _text(s, 6.6, 2.8, 5.6, 0.3, "Availability vs. SLA Target (per site)", 14, _NAVY, bold=True)
-    _bar_chart(s, 6.6, 3.35, 5.6, 2.85, o["sites"], g["target"])
-
-    # ---- Slide 3: business unit & site reliability ----
-    s = prs.slides.add_slide(blank)
-    _header(s, "Business Unit & Site Reliability", "Scorecards for management; full drill-down stays in the app.", "03")
-    bx = 0.8
-    for b in o.get("business_units", [])[:4]:
-        _rect(s, bx, 1.3, 2.9, 1.7, _WHITE, line=_LINE)
-        _text(s, bx + 0.15, 1.45, 2.6, 0.3, b["business_unit"].upper(), 11, _SLATE, bold=True)
-        _text(s, bx + 0.15, 1.75, 2.6, 0.5, _pct(b["availability_ytd"]), 22, _NAVY, bold=True)
-        _text(s, bx + 0.15, 2.3, 2.6, 0.3, f"YTD · {b['devices']} devices · {b['incidents']} incident(s)", 9, _GREY)
-        _chip(s, bx + 0.15, 2.62, b["status"], GREEN_BG if b["status"] == "HEALTHY" else (RED_BG if b["status"] == "CRITICAL" else AMBER_BG),
-              _GREEN if b["status"] == "HEALTHY" else (_RED if b["status"] == "CRITICAL" else _AMBER))
-        bx += 3.05
-    # top sites table
-    _text(s, 0.8, 3.4, 8, 0.3, "Lowest-availability sites (YTD)", 13, _NAVY, bold=True)
-    worst = sorted([x for x in o["sites"] if isinstance(x.get("availability_ytd"), (int, float))], key=lambda x: x["availability_ytd"])[:6]
-    ty = 3.85
-    _rect(s, 0.8, ty, 11.7, 0.32, RGBColor.from_string(ZEBRA))
-    for cxx, head in zip((0.9, 3.0, 5.5, 7.5, 9.5), ("Site", "City", "YTD", "30-day", "Status")):
-        _text(s, cxx, ty + 0.03, 2, 0.26, head, 9, _SLATE, bold=True)
-    for i, x in enumerate(worst):
-        yy = ty + 0.4 + i * 0.34
-        for cxx, val in zip((0.9, 3.0, 5.5, 7.5, 9.5),
-                            (x["site_code"], x["city"], _pct(x["availability_ytd"]), _pct(x["availability_30d"]), x["status"])):
-            _text(s, cxx, yy, 2.2, 0.3, str(val), 9.5, _NAVY)
-
-    # ---- Slide 4: risks & actions ----
-    s = prs.slides.add_slide(blank)
-    _header(s, "Top Reliability Risks and Actions", "Decision format: priority, impact, and recommended mitigation.", "04")
-    ty = 1.35
-    _rect(s, 0.8, ty, 11.7, 0.34, _BRAND)
-    for cxx, head in zip((0.95, 1.9, 6.4), ("Priority", "Risk", "Recommended action")):
-        _text(s, cxx, ty + 0.05, 5, 0.26, head, 10, _WHITE, bold=True)
-    rows = _readout(o, tr)
-    yy = ty + 0.45
-    for i, (pri, risk, sev, act) in enumerate(rows[:6]):
-        rh = 0.82
-        if i % 2 == 0:
-            _rect(s, 0.8, yy - 0.05, 11.7, rh, RGBColor.from_string(ZEBRA))
-        _text(s, 0.95, yy, 0.9, 0.3, pri, 11, _RED if sev == "P1" else (_AMBER if sev == "P2" else _SLATE), bold=True)
-        _text(s, 1.9, yy, 4.3, rh, risk, 11, _NAVY, bold=True)
-        _text(s, 6.4, yy, 6.0, rh, act, 10, _SLATE)
-        yy += rh + 0.04
-
-    # ---- Slide 5: observability & telemetry maturity ----
-    s = prs.slides.add_slide(blank)
-    _header(s, "Observability and Telemetry Maturity", "Availability coverage is strong; routing/service telemetry is limited by the tenant.", "05")
-    cov = tel["data_coverage"]; rt = tel["routing"]; iface = tel["interfaces"]; lat = tel["latency"]
-    tiles = [("Availability", f"{cov['fleet']}/{cov['fleet']}", "monitored"),
-             ("Interfaces up", f"{iface['up']}/{iface['total']}", "operational"),
-             ("OSPF devices", f"{rt['devices_with_ospf']}/{rt['fleet']}", "adjacency monitored"),
-             ("Avg latency", f"{lat['avg_latency_ms']} ms" if lat.get("avg_latency_ms") is not None else "—", "fleet mean")]
+    _header(s, "Executive Scorecard", "The 30-second read: are we meeting our service levels this week and this year?", "02")
+    tiles = [("Network SLA — This Week", _pct(fl["wtd"]), "target " + f"{tgt}%", _GREEN if fl["met_wtd"] else _RED),
+             ("Network SLA — Year to Date", _pct(fl["ytd"]), "target " + f"{tgt}%", _GREEN if fl["met_ytd"] else _RED),
+             ("SLA Budget Used", (f"{fl['budget_pct']}%" if fl["budget_pct"] is not None else "—"), "of allowed downtime", _NAVY if (fl["budget_pct"] or 0) <= 100 else _RED),
+             ("Branches Meeting SLA", f"{m['branches_met']}/{len(m['branches'])}", f"{m['branches_missed']} need attention", _NAVY),
+             ("Incidents (90 days)", str(m["mttr_mtbf"]["incidents"]), f"avg resolve {m['mttr_mtbf']['mttr_minutes']} min", _NAVY),
+             ("Trend", m["deltas"]["wow"]["trend"].title(), "week over week", _GREEN if "improv" in m["deltas"]["wow"]["trend"].lower() else (_RED if "worsen" in m["deltas"]["wow"]["trend"].lower() else _NAVY))]
     lx = 0.8
-    for lab, val, sub in tiles:
-        _kpi(s, lx, 1.3, 2.85, lab, val, sub)
-        lx += 3.05
-    _text(s, 0.8, 2.9, 11, 0.3, "Coverage matrix", 13, _NAVY, bold=True)
-    ty = 3.35
-    _rect(s, 0.8, ty, 11.7, 0.32, RGBColor.from_string(ZEBRA))
-    for cxx, head in zip((0.95, 4.5, 8.5, 10.8), ("Metric", "LogicMonitor source", "Coverage", "Devices")):
-        _text(s, cxx, ty + 0.03, 4, 0.26, head, 9, _SLATE, bold=True)
-    for i, m in enumerate(cov["metrics"][:9]):
-        yy = ty + 0.4 + i * 0.32
-        for cxx, val in zip((0.95, 4.5, 8.5, 10.8), (m["metric"], m["source"], m["status"], f"{m['devices']}/{cov['fleet']}")):
-            clr = _status_hex(val) if cxx == 8.5 else NAVY
-            _text(s, cxx, yy, 3.6, 0.3, str(val), 9, RGBColor.from_string(clr))
+    for lab, val, sub, col in tiles:
+        _kpi(s, lx, 1.2, 1.95, lab, val, sub, col); lx += 2.05
+    _rect(s, 0.8, 2.65, 5.2, 3.9, _WHITE, line=_LINE)
+    _text(s, 1.1, 2.85, 4.6, 0.3, "What this means", 14, _NAVY, bold=True)
+    _text(s, 1.1, 3.3, 4.7, 2.2, o["summary"], 11, _SLATE)
+    cx = _chip(s, 1.1, 6.05, "This week " + ("MET" if fl["met_wtd"] else "MISSED"), *( (GREEN_BG,_GREEN) if fl["met_wtd"] else (RED_BG,_RED)))
+    _chip(s, cx, 6.05, "YTD " + ("MET" if fl["met_ytd"] else "MISSED"), *((GREEN_BG,_GREEN) if fl["met_ytd"] else (RED_BG,_RED)))
+    _rect(s, 6.3, 2.65, 6.2, 3.9, _WHITE, line=_LINE)
+    _text(s, 6.6, 2.85, 5.6, 0.3, "Branch availability vs. SLA target (YTD)", 13, _NAVY, bold=True)
+    bd = [(b["site_code"] or b["city"][:4], b["ytd"], (_BRAND if b["met_ytd"] else _RED)) for b in sorted(m["branches"], key=lambda x:(x["ytd"] is None,-(x["ytd"] or 0)))[:12]]
+    lo = min([v for _,v,_ in bd if isinstance(v,(int,float))] + [tgt]) - 0.05
+    _vbars(s, 6.55, 3.35, 5.7, 3.0, bd, lo, 100.0, target=tgt)
 
-    # ---- Slide 6: methodology ----
+    # ---- Slide 3: branch SLA leaderboard ----
     s = prs.slides.add_slide(blank)
-    _header(s, "Methodology and Data Quality", "Appendix — definitions in plain language.", "06")
+    _header(s, "Branch SLA Leaderboard", "Every branch, ranked. Green met the target; red missed it. This is the basis for SLA-linked measures.", "03")
+    ty = 1.4
+    cols = [(0.9, "Rank"), (1.7, "Branch"), (3.4, "This Week"), (5.1, "Year to Date"), (7.0, "Met YTD"), (8.6, "Incidents"), (10.4, "Avg Resolve")]
+    _rect(s, 0.8, ty, 11.9, 0.34, _BRAND)
+    for cxx, head in cols:
+        _text(s, cxx, ty + 0.05, 2, 0.26, head, 10, _WHITE, bold=True)
+    for i, b in enumerate(m["branches"][:14]):
+        yy = ty + 0.42 + i * 0.34
+        if i % 2 == 0:
+            _rect(s, 0.8, yy - 0.03, 11.9, 0.34, RGBColor.from_string(ZEBRA))
+        cells = [str(b["rank"]), f"{b['site_code']} · {b['city']}", _pct(b["wtd"]), _pct(b["ytd"]),
+                 "MET" if b["met_ytd"] else "MISSED", str(b["incidents"]), (f"{b['mttr']} min" if b["mttr"] is not None else "—")]
+        for (cxx, _), val, idx in zip(cols, cells, range(len(cells))):
+            col = (_GREEN if b["met_ytd"] else _RED) if idx == 4 else _NAVY
+            _text(s, cxx, yy, 2.0, 0.3, val, 9.5, col, bold=(idx == 4))
+
+    # ---- Slide 4: Healthcare vs Dental ----
+    s = prs.slides.add_slide(blank)
+    _header(s, "Healthcare vs Dental", "How the two business units compare — reliability, SLA budget, and how quickly incidents are resolved.", "04")
+    lx = 0.8
+    for u in m["units"][:2]:
+        _rect(s, lx, 1.3, 5.9, 4.0, _WHITE, line=_LINE)
+        _text(s, lx + 0.3, 1.5, 5.3, 0.35, u["name"].upper(), 15, _BRAND, bold=True)
+        _text(s, lx + 0.3, 1.95, 3, 0.6, _pct(u["ytd"]), 34, _NAVY, bold=True)
+        _text(s, lx + 0.3, 2.65, 5, 0.3, "Year-to-date availability", 10, _GREY)
+        bg, fg, lbl = metchip(u["met_ytd"]); _chip(s, lx + 3.7, 2.15, "SLA " + lbl, bg, fg)
+        stats = [("This week", _pct(u["wtd"])), ("SLA budget used", (f"{u['budget_pct']}%" if u["budget_pct"] is not None else "—")),
+                 ("Devices / sites", f"{u['devices']} / {u['sites']}"), ("Incidents (90d)", str(u["incidents"])),
+                 ("Avg resolve time", (f"{u['mttr']} min" if u["mttr"] is not None else "—"))]
+        yy = 3.15
+        for k, v in stats:
+            _text(s, lx + 0.3, yy, 3.2, 0.3, k, 11, _SLATE)
+            _text(s, lx + 3.6, yy, 2.0, 0.3, v, 11, _NAVY, bold=True)
+            yy += 0.42
+        lx += 6.1
+    _text(s, 0.8, 5.55, 11.9, 0.8, "Both units are compared against the same " + f"{tgt}% target. 'SLA budget used' is how much of the allowed downtime each unit has consumed — the closer to 100%, the closer to a breach.", 11, _SLATE)
+
+    # ---- Slide 5: trend & incidents ----
+    s = prs.slides.add_slide(blank)
+    _header(s, "Trend & Incidents", "Are we getting better or worse? Weekly availability and monthly incident volume.", "05")
+    _rect(s, 0.8, 1.35, 6.0, 5.0, _WHITE, line=_LINE)
+    _text(s, 1.1, 1.55, 5.4, 0.3, "Availability by week (last 12 weeks)", 13, _NAVY, bold=True)
+    wk = [(w["week_start"][5:], w["availability"], (_RED if w["below_target"] else _BRAND)) for w in m["weekly"]]
+    wlo = min([v for _,v,_ in wk if isinstance(v,(int,float))] + [tgt]) - 0.05
+    _vbars(s, 1.0, 2.05, 5.6, 4.0, wk, wlo, 100.0, target=tgt)
+    _rect(s, 7.0, 1.35, 5.5, 5.0, _WHITE, line=_LINE)
+    _text(s, 7.3, 1.55, 4.9, 0.3, "Incidents logged per month", 13, _NAVY, bold=True)
+    im = m["incidents_month"]
+    mx = max([x["count"] for x in im] + [1])
+    mb = [(x["month"][5:], x["count"], _SLATE) for x in im]
+    _vbars(s, 7.2, 2.05, 5.1, 4.0, mb, 0, mx * 1.15, valfmt=lambda v: str(int(v)))
+    if len(im) >= 2 and im[-1]["count"] <= im[0]["count"]:
+        _text(s, 7.3, 6.0, 5.0, 0.4, f"Trend: incidents fell from {im[0]['count']} in {im[0]['month']} to {im[-1]['count']} in {im[-1]['month']}.", 10, _GREEN, bold=True)
+
+    # ---- Slide 6: the metrics that matter ----
+    s = prs.slides.add_slide(blank)
+    _header(s, "The metrics that matter", "Good SLA reporting is more than weekly uptime. These measures tell the real story.", "06")
+    cards = [
+        ("Availability (WTD / YTD)", f"{_pct(fl['wtd'])} / {_pct(fl['ytd'])}", "Was the service working? The headline number."),
+        ("SLA compliance", f"{m['branches_met']}/{len(m['branches'])} branches", "How many locations met the agreed target."),
+        ("SLA budget used", (f"{fl['budget_pct']}%" if fl['budget_pct'] is not None else "—"), "How much of the allowed downtime we've spent (100% = breach)."),
+        ("Avg time to resolve", f"{m['mttr_mtbf']['mttr_minutes']} min", "How fast we recover when something breaks (MTTR)."),
+        ("Incident frequency", f"{m['mttr_mtbf']['incidents']} in 90 days", "How often things break — falling is good (MTBF)."),
+        ("Consistency", f"Best {m['branches'][0]['city']} · Worst {m['branches'][-1]['city']}", "Steady beats a good average with one big outage."),
+    ]
+    for i, (lab, val, sub) in enumerate(cards):
+        cx = 0.8 + (i % 3) * 4.05; cy = 1.5 + (i // 3) * 2.5
+        _rect(s, cx, cy, 3.85, 2.2, _WHITE, line=_LINE)
+        _text(s, cx + 0.2, cy + 0.15, 3.5, 0.3, lab.upper(), 10, _SLATE, bold=True)
+        _text(s, cx + 0.2, cy + 0.5, 3.5, 0.6, val, 20, _NAVY, bold=True)
+        _text(s, cx + 0.2, cy + 1.25, 3.5, 0.8, sub, 10.5, _GREY)
+
+    # ---- Slide 7: methodology / payment basis ----
+    s = prs.slides.add_slide(blank)
+    _header(s, "How every number is measured", "The basis for SLA reporting and any SLA-linked measures.", "07")
     defs = [
-        ("Availability", "Up eligible minutes divided by observed eligible minutes, coverage-gated at 90%."),
-        ("Coverage", "Observed minutes / expected minutes; below 90% is 'Insufficient evidence', never 0%."),
-        ("Commissioning-aware YTD", "Each site is measured from when it was first monitored, so a mid-year project is not penalised."),
-        ("Resilience tier", "A network-redundancy estimate mapped to Uptime bands — not a facility certification."),
-        ("Scope", "Only devices registered in Device Fleet are analysed, not all of LogicMonitor."),
-        ("Missing telemetry", "Reported as Insufficient / Not monitored — never fabricated as 0% or 100%."),
+        ("Availability", "Up minutes ÷ observed minutes × 100. A minute counts as 'up' when the device answered at least one probe."),
+        ("This Week / Year to Date", "This Week is Monday to now. Year to Date runs from each branch's first monitored day — a new branch is not penalised for months it did not exist."),
+        ("SLA budget used", "Downtime ÷ allowed downtime × 100. Allowed = observed minutes × (1 − target). Over 100% means the SLA was breached."),
+        ("Evidence gating", "If less than 90% of the expected minutes were observed, no number is published — never a fabricated 0% or 100%."),
+        ("Incidents & resolve time", "Incidents are runs of below-100% availability days; average resolve time (MTTR) is total downtime ÷ incidents. Availability-derived and approximate."),
+        ("Scope", f"Only Medline's own devices are measured, against a {tgt}% target. WAN provider routers are excluded from Medline SLA."),
     ]
     yy = 1.4
     for term, defn in defs:
-        _rect(s, 0.8, yy, 11.7, 0.72, _WHITE, line=_LINE)
-        _text(s, 1.0, yy + 0.1, 3.0, 0.5, term, 12, _BRAND, bold=True)
-        _text(s, 4.1, yy + 0.1, 8.2, 0.55, defn, 11, _SLATE, anchor=MSO_ANCHOR.MIDDLE)
-        yy += 0.85
+        _rect(s, 0.8, yy, 11.9, 0.82, _WHITE, line=_LINE)
+        _text(s, 1.0, yy + 0.12, 3.2, 0.6, term, 12, _BRAND, bold=True)
+        _text(s, 4.3, yy + 0.12, 8.2, 0.6, defn, 10.5, _SLATE, anchor=MSO_ANCHOR.MIDDLE)
+        yy += 0.9
 
     prs.save(path)
     return path
