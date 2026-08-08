@@ -153,6 +153,25 @@ DETAIL_TABLES = {
 }
 
 
+_IF_LONG = (("tengigabitethernet", "te"), ("fortygigabitethernet", "fo"), ("twentyfivegige", "twe"),
+            ("gigabitethernet", "gi"), ("fastethernet", "fa"), ("ethernet", "et"), ("port-channel", "po"),
+            ("portchannel", "po"), ("loopback", "lo"), ("tunnel", "tu"), ("vlan", "vl"), ("management", "ma"))
+
+
+def _ifkey(name):
+    """Canonical interface key so 'GigabitEthernet1/0/1' and 'Gi1/0/1' match on merge."""
+    s = re.sub(r"\s+", "", str(name or "")).lower()
+    for long, short in _IF_LONG:
+        if s.startswith(long):
+            return short + s[len(long):]
+    return s
+
+
+# SSH show-command output that is authoritative and should replace the LM display table
+# (LM cannot provide these columns at all, e.g. inventory PID/VID/serial).
+_SSH_AUTHORITATIVE = {"Inventory"}
+
+
 @app.get("/api/v1/devices/{device_id}/detail")
 def device_detail(device_id: int, user=Depends(current_user), db: Session = Depends(session)):
     item = db.get(Device, device_id)
@@ -177,24 +196,25 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
     if facts and facts.data:
         ssh_tables = facts.data.get("tables", {})
         by_name = {t["name"]: t for t in tables}
-        # Enrich interface rows (VLAN / duplex / speed / type) by interface name.
+        # Enrich interface rows (VLAN / duplex / speed / errors) by normalized interface name.
         if_status = ssh_tables.get("_if_status", {})
         if if_status and by_name.get("Interfaces", {}).get("rows"):
+            if_norm = {_ifkey(k): v for k, v in if_status.items()}
             for row in by_name["Interfaces"]["rows"]:
-                enr = if_status.get(row.get("Interface"))
+                enr = if_norm.get(_ifkey(row.get("Interface")))
                 if enr:
                     for col in ("Description", "Status", "VLAN", "Duplex", "Speed", "Type", "FCS/CRC Errors", "Align Errors"):
                         cur = row.get(col)
                         if enr.get(col) and (cur is None or str(cur).strip() == "" or str(cur).lower().startswith("not ")):
                             row[col] = enr[col]
-        # Overlay empty LM tables and append SSH-only tables.
+        # Overlay empty LM tables, replace authoritative ones, and append SSH-only tables.
         for name, rows in ssh_tables.items():
             if name == "_if_status":
                 continue
             if name in by_name:
-                if not by_name[name]["rows"]:
+                if not by_name[name]["rows"] or name in _SSH_AUTHORITATIVE:
                     by_name[name]["rows"] = rows
-                    by_name[name]["evidence_status"] = "Manually collected"
+                    by_name[name]["evidence_status"] = "Collected via SSH"
                     by_name[name]["source"] = "ssh"
             else:
                 tables.append({"name": name, "columns": list(rows[0].keys()) if rows else [], "rows": rows,
