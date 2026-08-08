@@ -12,7 +12,7 @@ from contextlib import suppress
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -209,7 +209,7 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
 
 
 class ManualCollect(BaseModel):
-    transcript: str
+    transcript: str = Field(max_length=5_000_000)  # cap pasted output (~5 MB) to prevent abuse
 
 
 @app.get("/api/v1/devices/{device_id}/collect-plan")
