@@ -183,7 +183,7 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
             for row in by_name["Interfaces"]["rows"]:
                 enr = if_status.get(row.get("Interface"))
                 if enr:
-                    for col in ("Description", "Status", "VLAN", "Duplex", "Speed", "Type"):
+                    for col in ("Description", "Status", "VLAN", "Duplex", "Speed", "Type", "FCS/CRC Errors", "Align Errors"):
                         cur = row.get(col)
                         if enr.get(col) and (cur is None or str(cur).strip() == "" or str(cur).lower().startswith("not ")):
                             row[col] = enr[col]

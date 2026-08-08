@@ -21,9 +21,10 @@ _COMMANDS = [
     ("show inventory", "inventory"),
     ("show vlan brief", "vlans"),
     ("show interfaces status", "if_status"),
+    ("show interfaces counters errors", "if_errors"),
     ("show cdp neighbors detail", "cdp"),
     ("show lldp neighbors detail", "lldp"),
-    ("show spanning-tree", "stp"),
+    ("show spanning-tree summary", "stp"),
     ("show ip ospf neighbor", "ospf"),
     ("show ip bgp summary", "bgp"),
     ("show ip eigrp neighbors", "eigrp"),
@@ -122,6 +123,14 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
         if port:
             if_status[port] = {"Description": r.get("name"), "Status": r.get("status"), "VLAN": r.get("vlan"),
                                "Duplex": r.get("duplex"), "Speed": r.get("speed"), "Type": r.get("type")}
+    # merge interface error counters (show interfaces counters errors) by interface name
+    for r in _rows(parsed.get("if_errors")):
+        port = r.get("interface") or r.get("port")
+        if not port:
+            continue
+        entry = if_status.setdefault(port, {})
+        entry["FCS/CRC Errors"] = r.get("fcs_errors") or r.get("crc") or r.get("fcs")
+        entry["Align Errors"] = r.get("align_errors") or r.get("align")
     if if_status:
         tables["_if_status"] = if_status
 
@@ -167,6 +176,33 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
              for r in _rows(parsed.get("eigrp"))]
     if eigrp:
         tables["EIGRP Neighbors (SSH)"] = eigrp
+
+    # Spanning tree — parse the per-VLAN counts from `show spanning-tree summary`
+    stp_raw = raw.get("stp", "")
+    stp_rows = []
+    if stp_raw and not _unsupported(stp_raw):
+        for m in re.finditer(r"^\s*(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", stp_raw, re.M):
+            name = m.group(1)
+            if name.lower() == "name":
+                continue
+            stp_rows.append({"Instance": name, "Blocking": m.group(2), "Listening": m.group(3),
+                             "Learning": m.group(4), "Forwarding": m.group(5), "Active": m.group(6)})
+    if stp_rows:
+        tables["Spanning Tree"] = stp_rows
+
+    # Environmental & PoE — PoE per port (show power inline) + sensors (show environment all)
+    env_rows = []
+    for r in _rows(parsed.get("poe")):
+        env_rows.append({"Category": "PoE", "Switch/Module": "-", "Component/Interface": r.get("interface") or r.get("port"),
+                         "State": r.get("oper_state") or r.get("oper") or r.get("admin_state"), "Temperature C": "-",
+                         "Fan RPM": "-", "Watts": r.get("power") or r.get("watts"), "Details": r.get("device") or r.get("class")})
+    for r in _rows(parsed.get("env")):
+        env_rows.append({"Category": r.get("type") or r.get("sensor") or "Sensor", "Switch/Module": r.get("module") or "-",
+                         "Component/Interface": r.get("sensor") or r.get("descr") or r.get("name") or "-",
+                         "State": r.get("state") or r.get("status"), "Temperature C": r.get("temperature") or r.get("temp"),
+                         "Fan RPM": r.get("speed") or r.get("fan_speed"), "Watts": r.get("power"), "Details": r.get("reading")})
+    if env_rows:
+        tables["Environmental and PoE"] = env_rows
 
     config = raw.get("config")
     if config and not _unsupported(config):
