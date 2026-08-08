@@ -177,11 +177,11 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
             if name in by_name:
                 if not by_name[name]["rows"]:
                     by_name[name]["rows"] = rows
-                    by_name[name]["evidence_status"] = "Pulled via SSH"
+                    by_name[name]["evidence_status"] = "Manually collected"
                     by_name[name]["source"] = "ssh"
             else:
                 tables.append({"name": name, "columns": list(rows[0].keys()) if rows else [], "rows": rows,
-                               "evidence_status": "Pulled via SSH", "source": "ssh"})
+                               "evidence_status": "Manually collected", "source": "ssh"})
         # Drop monitoring-gap rows that SSH has since filled.
         gaps = by_name.get("Monitoring Gaps")
         if gaps:
@@ -191,44 +191,57 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
     return {"device": DeviceOut.model_validate(item), "tables": tables, "source": "LogicMonitor read-only API", "ssh": ssh_meta}
 
 
-class SshRequest(BaseModel):
-    password: str
+class ManualCollect(BaseModel):
+    transcript: str
 
 
-@app.post("/api/v1/devices/{device_id}/ssh-collect")
-def ssh_collect_device(device_id: int, body: SshRequest, user=Depends(administrator), db: Session = Depends(session)):
-    """Admin-only: pull LogicMonitor gaps directly from the device over READ-ONLY SSH
-    (fixed `show`-command allow-list). Username is fixed to pa-phessamfar; the target IP is
-    the device's Management IP; the password is used for one session and never stored."""
+@app.get("/api/v1/devices/{device_id}/collect-plan")
+def collect_plan(device_id: int, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: the read-only `show` commands to run manually on this device, plus which
+    detail tables are currently gaps (empty in LogicMonitor). The account has MFA, so the
+    admin runs these in their own SSH session and pastes the output back."""
     item = db.get(Device, device_id)
     if not item:
         raise HTTPException(404, "Device not found")
-    host = item.management_ip
-    if not host:
-        return {"status": "no_ip", "message": "This device has no Management IP on record, so SSH cannot be attempted."}
-    result = ssh_collect.collect(host, "pa-phessamfar", body.password)
+    latest = db.scalar(select(Snapshot).where(Snapshot.device_id == device_id).order_by(Snapshot.collected_at.desc()).limit(1))
+    have = (latest.details.get("tables", {}) if latest and latest.details else {})
+    gap_tables = ("VLANs", "Spanning Tree", "CDP-LLDP Neighbors", "Inventory", "OSPF Neighbors", "Environmental and PoE")
+    gaps = [t for t in gap_tables if not have.get(t)]
+    return {"hostname": item.hostname, "management_ip": item.management_ip, "username": "pa-phessamfar",
+            "script": ssh_collect.SCRIPT, "commands": ssh_collect.COMMANDS, "gaps": gaps, "gap_commands": ssh_collect.GAP_COMMANDS}
+
+
+@app.post("/api/v1/devices/{device_id}/manual-collect")
+def manual_collect(device_id: int, body: ManualCollect, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: parse an admin-pasted read-only `show` transcript and store it as an
+    overlay that fills the LogicMonitor gaps until the next manual collection. The
+    application never connects to the device and never handles any credential."""
+    item = db.get(Device, device_id)
+    if not item:
+        raise HTTPException(404, "Device not found")
+    result = ssh_collect.parse_transcript(body.transcript)
     outcome = result.get("status")
-    db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.ssh_collect", target=f"device:{device_id}",
-                      details={"host": host, "result": outcome}))  # never logs the password
+    db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.manual_collect", target=f"device:{device_id}",
+                      details={"result": outcome, "recognised": (result.get("data") or {}).get("recognised")}))
     if outcome != "ok":
         db.commit()
         return {"status": outcome, "message": result.get("message")}
     facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id)) or SshFacts(device_id=device_id)
-    facts.host = host; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
+    facts.host = item.management_ip or ""; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
     facts.collected_at = datetime.now(timezone.utc); facts.data = result["data"]
     db.add(facts); db.commit()
     return {"status": "ok", "collected_at": facts.collected_at.isoformat(), "collected_by": facts.collected_by,
             "tables": {k: v for k, v in result["data"]["tables"].items() if k != "_if_status"},
-            "has_config": bool(result["data"].get("config"))}
+            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config"))}
 
 
 @app.get("/api/v1/devices/{device_id}/ssh-config")
 def ssh_config(device_id: int, user=Depends(administrator), db: Session = Depends(session)):
-    """Admin-only: the running-config text pulled by the last SSH collection (read-only)."""
+    """Admin-only: the running-config text captured by the last manual collection (read-only)."""
     facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id))
     cfg = (facts.data or {}).get("config") if facts else None
     if not cfg:
-        raise HTTPException(404, "No SSH-collected running-config available")
+        raise HTTPException(404, "No manually-collected running-config available")
     return {"config": cfg, "collected_at": facts.collected_at.isoformat() if facts.collected_at else None}
 
 

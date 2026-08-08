@@ -12,4 +12,5 @@ openpyxl==3.1.5
 pytest==8.4.1
 
 python-pptx==1.0.2
-netmiko==4.4.0
+ntc-templates==7.9.0
+textfsm==1.1.3

@@ -169,10 +169,11 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
 function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,administrator:boolean}){
   const[data,setData]=useState<any>(null);
   const[tab,setTab]=useState('Health Data');
-  const[sshOpen,setSshOpen]=useState(false);const[pw,setPw]=useState('');const[sshBusy,setSshBusy]=useState(false);const[sshMsg,setSshMsg]=useState('');const[cfg,setCfg]=useState<string|null>(null);
+  const[sshOpen,setSshOpen]=useState(false);const[transcript,setTranscript]=useState('');const[sshBusy,setSshBusy]=useState(false);const[sshMsg,setSshMsg]=useState('');const[cfg,setCfg]=useState<string|null>(null);const[plan,setPlan]=useState<any>(null);
   const load=()=>api(`/devices/${device.id}/detail`).then(setData);
   useEffect(()=>{load()},[device.id]);
-  const runSsh=async()=>{setSshBusy(true);setSshMsg('');try{const r=await api(`/devices/${device.id}/ssh-collect`,{method:'POST',body:JSON.stringify({password:pw})});if(r.status==='ok'){setPw('');setSshOpen(false);await load()}else{setSshMsg(r.message||'SSH failed.')}}catch(x:any){setSshMsg(x.message||'SSH failed.')}finally{setSshBusy(false)}};
+  const openCollect=async()=>{setSshMsg('');setTranscript('');setSshOpen(true);try{setPlan(await api(`/devices/${device.id}/collect-plan`))}catch{}};
+  const runCollect=async()=>{setSshBusy(true);setSshMsg('');try{const r=await api(`/devices/${device.id}/manual-collect`,{method:'POST',body:JSON.stringify({transcript})});if(r.status==='ok'){setTranscript('');setSshOpen(false);await load()}else{setSshMsg(r.message||'Could not parse the pasted output.')}}catch(x:any){setSshMsg(x.message)}finally{setSshBusy(false)}};
   const viewCfg=async()=>{try{const r=await api(`/devices/${device.id}/ssh-config`);setCfg(r.config)}catch(x:any){setCfg('Unable to load running-config.')}};
   if(!data)return <div className="detail-view"><div className="dv-panel dv-loading">Loading device details…</div></div>;
   const table=data.tables.find((x:any)=>x.name===tab)||data.tables[0];
@@ -214,10 +215,10 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
       <div className="dv-hero-state">
         <span className="dv-chip"><span className="dv-dot"/> Monitoring state</span>
         <div className={'dv-state-value dv-'+(device.match_status==='Matched'?'ok':'warn')}>{device.match_status}</div>
-        {administrator&&<button className="ds-btn accent" style={{marginTop:12}} onClick={()=>{setSshMsg('');setSshOpen(true)}}><Terminal size={14}/> Pull gaps via SSH</button>}
+        {administrator&&<button className="ds-btn accent" style={{marginTop:12}} onClick={openCollect}><Terminal size={14}/> Fill gaps from device</button>}
       </div>
     </section>
-    {data.ssh&&<div className="dv-ssh-banner"><Terminal size={14}/><span>Direct-device data pulled via read-only SSH {data.ssh.collected_at?new Date(data.ssh.collected_at).toLocaleString():''}{data.ssh.collected_by?` by ${data.ssh.collected_by}`:''}. Shown until the next SSH push.</span>{data.ssh.has_config&&administrator&&<button className="ds-btn ghost sm" onClick={viewCfg}>View running-config</button>}</div>}
+    {data.ssh&&<div className="dv-ssh-banner"><Terminal size={14}/><span>Device data collected manually {data.ssh.collected_at?new Date(data.ssh.collected_at).toLocaleString():''}{data.ssh.collected_by?` by ${data.ssh.collected_by}`:''}. Shown until the next manual collection.</span>{data.ssh.has_config&&administrator&&<button className="ds-btn ghost sm" onClick={viewCfg}>View running-config</button>}</div>}
     <div className="dv-ribbon">
       {metrics.map(m=><div className="dv-metric" key={m.label}><span className="dv-metric-label">{m.icon} {m.label}</span><span className={'dv-metric-value'+(m.mono?' dv-metric-sm':'')}>{m.value}</span></div>)}
     </div>
@@ -234,15 +235,17 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
         ?<NeighborTopology device={device} rows={table.rows}/>
         :table.rows.length
           ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{displayColumns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i}>{displayColumns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
-          :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized{administrator?', or when an administrator pulls it directly via read-only SSH':''}. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{displayColumns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
+          :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized{administrator?', or when an administrator fills it via a manual device collection':''}. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{displayColumns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
     </section>
-    {sshOpen&&<div className="dv-modal-back" onClick={()=>!sshBusy&&setSshOpen(false)}><div className="dv-modal" onClick={e=>e.stopPropagation()}>
-      <h2>Pull gaps via read-only SSH</h2>
-      <p className="dv-modal-sub">Runs a fixed set of Cisco <code>show</code> commands only — no configuration change is made. Connecting to <b>{device.management_ip||'no management IP'}</b> as <b>pa-phessamfar</b>. The password is used for one session and never stored.</p>
-      <label className="dv-modal-label">SSH password</label>
-      <input type="password" className="dv-modal-input" value={pw} autoFocus onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&pw&&!sshBusy&&runSsh()} placeholder="Enter password"/>
+    {sshOpen&&<div className="dv-modal-back" onClick={()=>!sshBusy&&setSshOpen(false)}><div className="dv-modal dv-modal-wide" onClick={e=>e.stopPropagation()}>
+      <h2>Fill gaps from the device (manual)</h2>
+      <p className="dv-modal-sub">The <b>pa-phessamfar</b> account uses MFA, so the app can't connect. In your own SSH session to <b>{plan?.management_ip||device.management_ip||'the device'}</b>, run the read-only commands below, then paste the whole output here. Only <code>show</code> commands — nothing is changed.{plan?.gaps?.length?<> Current gaps: <b>{plan.gaps.join(', ')}</b>.</>:null}</p>
+      <label className="dv-modal-label">1 · Commands to run (copy)</label>
+      <div style={{position:'relative'}}><pre className="dv-config" style={{maxHeight:150}}>{plan?.script||'…'}</pre><button className="ds-btn sm" style={{position:'absolute',top:8,right:8}} onClick={()=>{navigator.clipboard&&navigator.clipboard.writeText(plan?.script||'')}}>Copy</button></div>
+      <label className="dv-modal-label" style={{marginTop:14}}>2 · Paste the full command output</label>
+      <textarea className="dv-modal-input" style={{minHeight:150,resize:'vertical',fontFamily:'var(--dv-mono)',fontSize:12}} value={transcript} onChange={e=>setTranscript(e.target.value)} placeholder="Paste everything from your SSH session here…"/>
       {sshMsg&&<p className="dv-ssh-err">{sshMsg}</p>}
-      <div className="dv-modal-actions"><button className="ds-btn" onClick={()=>setSshOpen(false)} disabled={sshBusy}>Cancel</button><button className="ds-btn accent" onClick={runSsh} disabled={sshBusy||!pw||!device.management_ip}>{sshBusy?'Connecting…':'Connect & collect'}</button></div>
+      <div className="dv-modal-actions"><button className="ds-btn" onClick={()=>setSshOpen(false)} disabled={sshBusy}>Cancel</button><button className="ds-btn accent" onClick={runCollect} disabled={sshBusy||!transcript.trim()}>{sshBusy?'Parsing…':'Parse & fill gaps'}</button></div>
     </div></div>}
     {cfg!=null&&<div className="dv-modal-back" onClick={()=>setCfg(null)}><div className="dv-modal dv-modal-wide" onClick={e=>e.stopPropagation()}>
       <h2>Running configuration <span className="dv-modal-sub" style={{fontWeight:400}}>(read-only, via SSH)</span></h2>
