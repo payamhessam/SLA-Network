@@ -397,6 +397,43 @@ def report_executive_pptx(user=Depends(current_user), db:Session=Depends(session
     return {"filename":path.name,"download_url":f"/api/v1/reports/{path.name}"}
 
 
+_help_cache = {"data": None, "at": 0.0}
+
+
+@app.get("/api/v1/help/explain")
+def help_explain(user=Depends(current_user), db: Session = Depends(session)):
+    """Live figures for the Help Center's 'why this number?' explanations. Reuses the EXACT
+    same analytics builders as the dashboards (overview/telemetry/trends) so Help can never
+    disagree with what the pages show — one source of truth."""
+    now = time.time()
+    if _help_cache["data"] is None or now - _help_cache["at"] > 60:
+        o = overview.build(db); g = o["global_sla"]; h = o["header"]; crit = o["criticality"]
+        tel = telemetry.build(db); tr = trends.build(db)
+        avail_sites = [s for s in o["sites"] if isinstance(s.get("availability_ytd"), (int, float))]
+        worst = min(avail_sites, key=lambda s: s["availability_ytd"], default=None)
+        lat = tel["latency"]; iface = tel["interfaces"]; rt = tel["routing"]
+        _help_cache["data"] = {
+            "global_sla": {"current": g["current"], "target": g["target"], "delta": g["delta"], "status": g["status"],
+                            "ytd": g["ytd"], "coverage": g["coverage"], "trend_7d": g["trend_7d"], "trend_30d": g["trend_30d"]},
+            "fleet": {"total": h["fleet_coverage"]["total"], "monitored": h["fleet_coverage"]["monitored"],
+                       "matched": h["lm_coverage"]["matched"], "evidence_coverage": h["sla_evidence_coverage"], "data_quality": h["data_quality"]},
+            "criticality": {"total": crit["total"], "bands": crit["bands"], "degraded": crit["degraded"], "unreachable": crit["unreachable"]},
+            "business_units": [{"name": b["business_unit"], "ytd": b["availability_ytd"], "d30": b["availability_30d"],
+                                 "devices": b["devices"], "sites": b["sites"], "incidents": b["incidents"], "status": b["status"], "reason": b.get("reason")} for b in o.get("business_units", [])],
+            "worst_site": ({"site": worst["site_code"], "city": worst["city"], "ytd": worst["availability_ytd"]} if worst else None),
+            "incidents": {"count": tr["mttr_mtbf"]["incidents"], "window_days": tr["mttr_mtbf"]["window_days"],
+                           "mttr_minutes": tr["mttr_mtbf"]["mttr_minutes"], "mtbf_hours": tr["mttr_mtbf"]["mtbf_hours"]},
+            "trends": {"wow": tr["deltas"]["wow"]["trend"], "mom": tr["deltas"]["mom"]["trend"]},
+            "telemetry": {"latency_avg": lat["avg_latency_ms"], "latency_max": lat["max_latency_ms"], "loss_avg": lat["avg_loss_pct"],
+                           "if_total": iface["total"], "if_up": iface["up"], "if_down": iface["down"], "if_high": iface["high_util"], "if_errors": iface["with_errors"],
+                           "ospf_devices": rt["devices_with_ospf"], "ospf_fleet": rt["fleet"]},
+            "resilience": {"tier": o["resilience"]["fleet_tier"]},
+            "target": g["target"], "coverage_threshold": settings.coverage_threshold,
+        }
+        _help_cache["at"] = now
+    return _help_cache["data"]
+
+
 @app.get("/api/v1/reports/{filename}")
 def download(filename:str, user=Depends(current_user)):
     if not re.fullmatch(r"(Network_Health|Executive_Reliability)_[0-9_-]+\.(xlsx|pptx)",filename): raise HTTPException(400,"Invalid report name")

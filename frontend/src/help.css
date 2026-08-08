@@ -1,0 +1,42 @@
+/* Help Center — indexed, searchable knowledge base (uses design-system tokens). */
+.help-center{display:grid;grid-template-columns:300px minmax(0,1fr);gap:22px;align-items:start}
+.help-side{position:sticky;top:88px;display:flex;flex-direction:column;gap:14px;max-height:calc(100vh - 110px);overflow:auto}
+.help-search{display:flex;align-items:center;gap:8px;background:var(--ds-surface);border:1px solid var(--ds-line-strong);border-radius:var(--ds-r-md);padding:0 12px}
+.help-search input{flex:1;border:0;outline:none;background:none;color:var(--ds-ink);font-family:inherit;font-size:14px;padding:11px 0}
+.help-search svg{color:var(--ds-ink-3);flex:none}
+.help-cat{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ds-ink-3);padding:12px 8px 4px}
+.help-nav{display:flex;flex-direction:column;gap:1px}
+.help-nav-item{display:block;width:100%;text-align:left;border:0;background:none;cursor:pointer;padding:7px 10px;border-radius:var(--ds-r-md);font-family:inherit;font-size:13.5px;color:var(--ds-ink-2)}
+.help-nav-item:hover{background:var(--ds-surface-3);color:var(--ds-ink)}
+.help-nav-item.active{background:var(--ds-accent-weak);color:var(--ds-ink);font-weight:600}
+
+.help-main{min-width:0;background:var(--ds-surface);border:1px solid var(--ds-line);border-radius:var(--ds-r-lg);padding:28px 30px;max-width:900px}
+.help-eyebrow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ds-accent)}
+.help-main h1{font-size:26px;font-weight:700;letter-spacing:-.02em;color:var(--ds-ink);margin:4px 0 6px}
+.help-lead{font-size:15px;color:var(--ds-ink-2);line-height:1.55;margin:0 0 18px}
+.help-sec{margin-top:20px}
+.help-sec h3{font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ds-ink-3);margin:0 0 8px}
+.help-sec p{font-size:15px;line-height:1.6;color:var(--ds-ink);margin:0}
+.help-sec ul{margin:0;padding-left:20px}
+.help-sec li{font-size:15px;line-height:1.6;color:var(--ds-ink)}
+.help-mono{font-family:var(--ds-mono);font-size:14px;background:var(--ds-surface-2);border:1px solid var(--ds-line);border-radius:var(--ds-r-md);padding:12px 14px;white-space:pre-wrap;line-height:1.5;color:var(--ds-ink)}
+.help-why{margin-top:22px;background:var(--ds-accent-weak);border:1px solid var(--ds-line);border-left:3px solid var(--ds-accent);border-radius:var(--ds-r-md);padding:14px 16px}
+.help-why h3{color:var(--ds-accent);margin-bottom:8px}
+.help-why p,.help-why li{font-size:14.5px;line-height:1.6;color:var(--ds-ink)}
+.help-tech{margin-top:18px;border-top:1px dashed var(--ds-line);padding-top:12px}
+.help-tech summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--ds-ink-2)}
+.help-tech p{margin-top:8px;font-size:14px;line-height:1.6;color:var(--ds-ink-2)}
+.help-related{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.help-related button{border:1px solid var(--ds-line);background:var(--ds-surface-2);color:var(--ds-accent);border-radius:var(--ds-r-full);padding:5px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
+.help-related button:hover{background:var(--ds-surface-3)}
+.help-result{display:block;width:100%;text-align:left;border:1px solid var(--ds-line);background:var(--ds-surface);border-radius:var(--ds-r-md);padding:12px 14px;margin-bottom:8px;cursor:pointer}
+.help-result:hover{background:var(--ds-surface-2)}
+.help-result b{color:var(--ds-ink);font-size:14px}
+.help-result .path{font-family:var(--ds-mono);font-size:11px;color:var(--ds-ink-3);margin-left:6px}
+.help-result p{margin:4px 0 0;font-size:13px;color:var(--ds-ink-2)}
+.help-gloss dt{font-weight:700;color:var(--ds-ink);margin-top:14px;font-size:15px}
+.help-gloss dd{margin:3px 0 0;color:var(--ds-ink-2);font-size:14.5px;line-height:1.55}
+.help-faq details{border-bottom:1px solid var(--ds-line);padding:12px 0}
+.help-faq summary{cursor:pointer;font-weight:600;color:var(--ds-ink);font-size:15px}
+.help-faq p{margin:8px 0 0;color:var(--ds-ink-2);font-size:14.5px;line-height:1.6}
+@media(max-width:900px){.help-center{grid-template-columns:1fr}.help-side{position:static;max-height:none}}
