@@ -35,7 +35,10 @@ from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
 from . import overview, reports, resilience, sla, ssh_collect, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0", docs_url="/docs")
+# Disable the interactive docs and OpenAPI schema in production (no API surface disclosure).
+_docs_url = None if settings.is_production else "/docs"
+app = FastAPI(title="Enterprise Network Health and SLA", version="1.0.0",
+              docs_url=_docs_url, redoc_url=None, openapi_url=(None if settings.is_production else "/openapi.json"))
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 app.include_router(inventory_router)

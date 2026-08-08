@@ -11,12 +11,15 @@ from typing import Annotated
 import hmac
 
 import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import Argon2Error
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import get_settings
 
 bearer = HTTPBearer(auto_error=False)
+_ph = PasswordHasher()
 
 
 def issue_token(username: str, role: str = "Administrator") -> str:
@@ -24,10 +27,22 @@ def issue_token(username: str, role: str = "Administrator") -> str:
     return jwt.encode({"sub": username, "role": role, "iat": now, "exp": now + timedelta(days=14)}, get_settings().signing_secret, algorithm="HS256")
 
 
+def _verify(password: str, stored: str) -> bool:
+    """Verify a credential. If the stored secret is an argon2 hash (starts with $argon2),
+    verify against the hash (passwords encrypted at rest); otherwise fall back to a
+    constant-time comparison for a plaintext secret file."""
+    if stored.startswith("$argon2"):
+        try:
+            return _ph.verify(stored, password)
+        except (Argon2Error, Exception):
+            return False
+    return hmac.compare_digest(password, stored)
+
+
 def authenticate(username: str, password: str) -> str | None:
     settings = get_settings()
-    if username == "admin" and hmac.compare_digest(password, settings.admin_password): return "Administrator"
-    if username == "user" and hmac.compare_digest(password, settings.user_password): return "Read-Only Viewer"
+    if username == "admin" and _verify(password, settings.admin_password): return "Administrator"
+    if username == "user" and _verify(password, settings.user_password): return "Read-Only Viewer"
     return None
 
 

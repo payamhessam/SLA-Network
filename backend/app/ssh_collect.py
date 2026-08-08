@@ -303,6 +303,35 @@ def _recommend(mnemonic: str, severity: int) -> tuple[str, str]:
 
 _INVALID = ("% invalid input", "% incomplete", "% ambiguous", "% unrecognized", "invalid input detected")
 
+# Redaction: never persist device credentials/keys pulled from a running-config. Each rule
+# keeps the line structure (so config stays readable/diffable) but masks the secret token.
+_REDACTORS = [
+    re.compile(r"(?i)^(\s*(?:no\s+)?(?:enable\s+)?(?:password|passwd|secret)\s+)(?:\d+\s+)?(\S.*)$"),
+    re.compile(r"(?i)^(\s*username\s+\S+\s+(?:privilege\s+\d+\s+)?(?:password|secret)\s+)(?:\d+\s+)?(\S.*)$"),
+    re.compile(r"(?i)^(\s*snmp-server\s+community\s+)(\S+)(.*)$"),
+    re.compile(r"(?i)^(\s*snmp-server\s+(?:user|host)\s+.*?(?:auth|priv|md5|sha|des|aes|community)\s+)(\S+)(.*)$"),
+    re.compile(r"(?i)^(\s*(?:pre-shared-key|key-string|key-hash|wpa-psk\s+\w+)\s+)(?:\d+\s+)?(\S.*)$"),
+    re.compile(r"(?i)^(\s*crypto\s+isakmp\s+key\s+)(\S+)(.*)$"),
+    re.compile(r"(?i)^(\s*(?:ppp\s+(?:chap|pap)\s+(?:password|secret)|neighbor\s+\S+\s+password)\s+)(?:\d+\s+)?(\S.*)$"),
+    re.compile(r"(?i)^(\s*(?:radius|tacacs).*\bkey\s+)(?:\d+\s+)?(\S.*)$"),
+]
+
+
+def _redact(text: str) -> str:
+    """Mask secrets in a device configuration/output before it is stored or returned."""
+    if not text:
+        return text
+    lines = []
+    for line in str(text).splitlines():
+        for rx in _REDACTORS:
+            m = rx.match(line)
+            if m:
+                tail = m.group(3) if rx.groups >= 3 else ""
+                line = m.group(1) + "<redacted>" + (tail or "")
+                break
+        lines.append(line)
+    return "\n".join(lines)
+
 
 def _unsupported(raw: str) -> bool:
     low = str(raw or "").lower()
@@ -519,6 +548,9 @@ def parse_transcript(transcript: str) -> dict:
     if not tables:
         return {"status": "no_data", "message": "The pasted output was recognised but produced no fillable data — check that terminal length 0 was set and the full output was copied."}
     config = raw.get("config") if not _unsupported(raw.get("config", "")) else None
+    config = _redact(config)  # never persist device passwords / SNMP communities / keys
+    if raw.get("config"):
+        raw = {**raw, "config": _redact(raw["config"])}
     return {
         "status": "ok",
         "data": {"tables": tables, "config": config, "raw": raw, "commands": COMMANDS,
