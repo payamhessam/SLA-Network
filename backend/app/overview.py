@@ -8,7 +8,7 @@ fabricated as 0% or 100%.
 """
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from . import resilience, sla
@@ -42,10 +42,19 @@ def _fleet(db: Session) -> list[dict]:
     inventory = db.scalars(select(InventoryDevice).where(InventoryDevice.enabled.is_(True))).all()
     legacy = {d.lm_device_id: d for d in db.scalars(select(Device).where(Device.lm_device_id.is_not(None))).all()}
     sites = {s.id: s for s in db.scalars(select(Site)).all()}
+    # Batch-fetch the latest snapshot per device in one query (avoids an N+1 over the fleet).
+    dev_ids = [d.id for d in legacy.values()]
+    snap_by_dev: dict[int, Snapshot] = {}
+    if dev_ids:
+        newest = (select(Snapshot.device_id, func.max(Snapshot.collected_at).label("mx"))
+                  .where(Snapshot.device_id.in_(dev_ids)).group_by(Snapshot.device_id).subquery())
+        rows = db.scalars(select(Snapshot).join(newest, and_(Snapshot.device_id == newest.c.device_id,
+                                                             Snapshot.collected_at == newest.c.mx))).all()
+        snap_by_dev = {s.device_id: s for s in rows}
     fleet = []
     for inv in inventory:
         dev = legacy.get(inv.logicmonitor_device_id) if inv.logicmonitor_device_id else None
-        snap = db.scalar(select(Snapshot).where(Snapshot.device_id == dev.id).order_by(Snapshot.collected_at.desc()).limit(1)) if dev else None
+        snap = snap_by_dev.get(dev.id) if dev else None
         site = sites.get(inv.site_id)
         criticality = inv.criticality or "Medium"
         # Physical chassis count: a switch stack is several physical switches behind one
