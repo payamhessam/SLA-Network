@@ -252,6 +252,39 @@ def manual_collect(device_id: int, body: ManualCollect, user=Depends(administrat
             "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config"))}
 
 
+class SshRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/v1/devices/{device_id}/ssh-collect")
+def ssh_collect_device(device_id: int, body: SshRequest, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: connect over READ-ONLY SSH and fill the LogicMonitor gaps. Username is
+    fixed to pa-phessamfar; the target is the device Management IP. The call blocks while the
+    device's auth backend waits for the administrator's push-MFA (Microsoft Authenticator)
+    approval, then runs the fixed `show`-command allow-list. The password is used for one
+    session and never stored or logged."""
+    item = db.get(Device, device_id)
+    if not item:
+        raise HTTPException(404, "Device not found")
+    host = item.management_ip
+    if not host:
+        return {"status": "no_ip", "message": "This device has no Management IP on record, so SSH cannot be attempted."}
+    result = ssh_collect.collect(host, "pa-phessamfar", body.password)
+    outcome = result.get("status")
+    db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.ssh_collect", target=f"device:{device_id}",
+                      details={"host": host, "result": outcome}))  # never logs the password
+    if outcome != "ok":
+        db.commit()
+        return {"status": outcome, "message": result.get("message")}
+    facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id)) or SshFacts(device_id=device_id)
+    facts.host = host; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
+    facts.collected_at = datetime.now(timezone.utc); facts.data = result["data"]
+    db.add(facts); db.commit()
+    return {"status": "ok", "collected_at": facts.collected_at.isoformat(), "collected_by": facts.collected_by,
+            "tables": {k: v for k, v in result["data"]["tables"].items() if k != "_if_status"},
+            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config"))}
+
+
 @app.get("/api/v1/devices/{device_id}/ssh-config")
 def ssh_config(device_id: int, user=Depends(administrator), db: Session = Depends(session)):
     """Admin-only: the running-config text captured by the last manual collection (read-only)."""

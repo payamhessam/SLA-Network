@@ -9,7 +9,7 @@
  * The code is intentionally dense; the <Help> tooltips and docs/APPLICATION.md explain
  * what each section means for end users.
  */
-import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{Activity,AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,Gauge,Globe,LayoutDashboard,LockKeyhole,LogOut,MemoryStick,Moon,Network,Plus,Radio,Router,Server,Settings as SettingsIcon,ShieldCheck,Sun,Terminal,Trash2,Wifi}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import WanProviders from'./WanProviders'; import Help from'./Help'; import{usePager,Pager}from'./Paged'; import'./design-system.css'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css'; import'./overview.css';
+import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{Activity,AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,Gauge,Globe,LayoutDashboard,LockKeyhole,LogOut,MemoryStick,Moon,Network,Plus,Radio,RefreshCw,Router,Server,Settings as SettingsIcon,ShieldCheck,Sun,Terminal,Trash2,Wifi}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import WanProviders from'./WanProviders'; import Help from'./Help'; import{usePager,Pager}from'./Paged'; import'./design-system.css'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css'; import'./overview.css';
 const NAV_ICONS:Record<string,any>={'Overview':LayoutDashboard,'Device Fleet':Server,'Access Points':Wifi,'SLA & Resilience':Gauge,'Network Telemetry':Network,'WAN Providers':Globe,'Settings':SettingsIcon};
 type Device={id:number;hostname:string;management_ip?:string;site:string;role:string;criticality:string;device_type:string;model?:string;active:boolean;match_status:string};
 const getToken=()=>localStorage.getItem('token')||sessionStorage.getItem('token');
@@ -169,10 +169,11 @@ function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
 function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,administrator:boolean}){
   const[data,setData]=useState<any>(null);
   const[tab,setTab]=useState('Health Data');
-  const[sshOpen,setSshOpen]=useState(false);const[transcript,setTranscript]=useState('');const[sshBusy,setSshBusy]=useState(false);const[sshMsg,setSshMsg]=useState('');const[cfg,setCfg]=useState<string|null>(null);const[plan,setPlan]=useState<any>(null);
+  const[sshOpen,setSshOpen]=useState(false);const[transcript,setTranscript]=useState('');const[sshBusy,setSshBusy]=useState(false);const[sshMsg,setSshMsg]=useState('');const[cfg,setCfg]=useState<string|null>(null);const[plan,setPlan]=useState<any>(null);const[pw,setPw]=useState('');
   const load=()=>api(`/devices/${device.id}/detail`).then(setData);
   useEffect(()=>{load()},[device.id]);
-  const openCollect=async()=>{setSshMsg('');setTranscript('');setSshOpen(true);try{setPlan(await api(`/devices/${device.id}/collect-plan`))}catch{}};
+  const openCollect=async()=>{setSshMsg('');setTranscript('');setPw('');setSshOpen(true);try{setPlan(await api(`/devices/${device.id}/collect-plan`))}catch{}};
+  const runConnect=async()=>{setSshBusy(true);setSshMsg('Approve the sign-in on your Microsoft Authenticator — this can take up to ~2 minutes.');try{const r=await api(`/devices/${device.id}/ssh-collect`,{method:'POST',body:JSON.stringify({password:pw})});if(r.status==='ok'){setPw('');setSshOpen(false);await load()}else{setSshMsg(r.message||'SSH failed.')}}catch(x:any){setSshMsg(x.message||'SSH failed.')}finally{setSshBusy(false)}};
   const runCollect=async()=>{setSshBusy(true);setSshMsg('');try{const r=await api(`/devices/${device.id}/manual-collect`,{method:'POST',body:JSON.stringify({transcript})});if(r.status==='ok'){setTranscript('');setSshOpen(false);await load()}else{setSshMsg(r.message||'Could not parse the pasted output.')}}catch(x:any){setSshMsg(x.message)}finally{setSshBusy(false)}};
   const viewCfg=async()=>{try{const r=await api(`/devices/${device.id}/ssh-config`);setCfg(r.config)}catch(x:any){setCfg('Unable to load running-config.')}};
   if(!data)return <div className="detail-view"><div className="dv-panel dv-loading">Loading device details…</div></div>;
@@ -238,14 +239,22 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
           :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized{administrator?', or when an administrator fills it via a manual device collection':''}. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{displayColumns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
     </section>
     {sshOpen&&<div className="dv-modal-back" onClick={()=>!sshBusy&&setSshOpen(false)}><div className="dv-modal dv-modal-wide" onClick={e=>e.stopPropagation()}>
-      <h2>Fill gaps from the device (manual)</h2>
-      <p className="dv-modal-sub">The <b>pa-phessamfar</b> account uses MFA, so the app can't connect. In your own SSH session to <b>{plan?.management_ip||device.management_ip||'the device'}</b>, run the read-only commands below, then paste the whole output here. Only <code>show</code> commands — nothing is changed.{plan?.gaps?.length?<> Current gaps: <b>{plan.gaps.join(', ')}</b>.</>:null}</p>
-      <label className="dv-modal-label">1 · Commands to run (copy)</label>
-      <div style={{position:'relative'}}><pre className="dv-config" style={{maxHeight:150}}>{plan?.script||'…'}</pre><button className="ds-btn sm" style={{position:'absolute',top:8,right:8}} onClick={()=>{navigator.clipboard&&navigator.clipboard.writeText(plan?.script||'')}}>Copy</button></div>
-      <label className="dv-modal-label" style={{marginTop:14}}>2 · Paste the full command output</label>
-      <textarea className="dv-modal-input" style={{minHeight:150,resize:'vertical',fontFamily:'var(--dv-mono)',fontSize:12}} value={transcript} onChange={e=>setTranscript(e.target.value)} placeholder="Paste everything from your SSH session here…"/>
-      {sshMsg&&<p className="dv-ssh-err">{sshMsg}</p>}
-      <div className="dv-modal-actions"><button className="ds-btn" onClick={()=>setSshOpen(false)} disabled={sshBusy}>Cancel</button><button className="ds-btn accent" onClick={runCollect} disabled={sshBusy||!transcript.trim()}>{sshBusy?'Parsing…':'Parse & fill gaps'}</button></div>
+      <h2>Fill gaps from the device</h2>
+      <p className="dv-modal-sub">Runs read-only Cisco <code>show</code> commands on <b>{plan?.management_ip||device.management_ip||'the device'}</b> as <b>pa-phessamfar</b> — no configuration change is made. The password is used for one session and never stored.{plan?.gaps?.length?<> Current gaps: <b>{plan.gaps.join(', ')}</b>.</>:null}</p>
+      <label className="dv-modal-label">Connect now — you'll approve the sign-in on Microsoft Authenticator</label>
+      <div style={{display:'flex',gap:8}}>
+        <input type="password" className="dv-modal-input" style={{flex:1}} value={pw} disabled={sshBusy} autoFocus onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&pw&&!sshBusy&&runConnect()} placeholder="SSH password"/>
+        <button className="ds-btn accent" style={{whiteSpace:'nowrap'}} onClick={runConnect} disabled={sshBusy||!pw||!(plan?.management_ip||device.management_ip)}>{sshBusy?'Waiting for approval…':'Connect & collect'}</button>
+      </div>
+      {sshMsg&&<p className={sshBusy?'dv-modal-sub':'dv-ssh-err'} style={{marginTop:12,display:'flex',alignItems:'center',gap:8}}>{sshBusy&&<RefreshCw size={14} className="dv-spin"/>}{sshMsg}</p>}
+      <details style={{marginTop:16}}><summary style={{cursor:'pointer',fontSize:13,color:'var(--dv-on-variant)'}}>Or paste output manually (if the app can't reach the device)</summary>
+        <label className="dv-modal-label" style={{marginTop:12}}>1 · Commands to run (copy)</label>
+        <div style={{position:'relative'}}><pre className="dv-config" style={{maxHeight:120}}>{plan?.script||'…'}</pre><button className="ds-btn sm" style={{position:'absolute',top:8,right:8}} onClick={()=>{navigator.clipboard&&navigator.clipboard.writeText(plan?.script||'')}}>Copy</button></div>
+        <label className="dv-modal-label" style={{marginTop:12}}>2 · Paste the full output</label>
+        <textarea className="dv-modal-input" style={{minHeight:110,resize:'vertical',fontFamily:'var(--dv-mono)',fontSize:12}} value={transcript} onChange={e=>setTranscript(e.target.value)} placeholder="Paste everything from your SSH session here…"/>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}><button className="ds-btn" onClick={runCollect} disabled={sshBusy||!transcript.trim()}>{sshBusy?'Parsing…':'Parse & fill gaps'}</button></div>
+      </details>
+      <div className="dv-modal-actions"><button className="ds-btn" onClick={()=>setSshOpen(false)} disabled={sshBusy}>Close</button></div>
     </div></div>}
     {cfg!=null&&<div className="dv-modal-back" onClick={()=>setCfg(null)}><div className="dv-modal dv-modal-wide" onClick={e=>e.stopPropagation()}>
       <h2>Running configuration <span className="dv-modal-sub" style={{fontWeight:400}}>(read-only, via SSH)</span></h2>

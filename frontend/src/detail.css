@@ -132,3 +132,7 @@
 .dv-ssh-err{margin:12px 0 0;color:var(--dv-crit);font-size:13px}
 .dv-modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
 .dv-config{max-height:60vh;overflow:auto;background:var(--dv-surface-low);border:1px solid var(--ds-line);border-radius:6px;padding:14px;font-family:var(--dv-mono);font-size:12px;line-height:1.5;color:var(--dv-on);white-space:pre;margin:0}
+
+/* SSH connect spinner */
+.dv-spin{animation:dv-spin 1s linear infinite;flex:none}
+@keyframes dv-spin{to{transform:rotate(360deg)}}

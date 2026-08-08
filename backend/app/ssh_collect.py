@@ -11,7 +11,30 @@ Everything here is read-only by construction: the command block contains only `s
 commands plus a per-session `terminal length 0`; nothing this module produces can change a
 device, and no credential is ever handled by the application.
 """
+import os
 import re
+import subprocess
+
+# OpenSSH options re-enabling the legacy algorithms these old Cisco devices require, forcing
+# password/keyboard-interactive auth, and disabling host-key prompts/storage. Read-only.
+_SSH_OPTS = [
+    "-tt",
+    "-o", "KexAlgorithms=+diffie-hellman-group14-sha1",
+    "-o", "HostKeyAlgorithms=+ssh-rsa",
+    "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
+    "-o", "MACs=+hmac-sha1,hmac-sha1-96",
+    "-o", "Ciphers=+aes128-cbc,aes192-cbc,aes256-cbc,3des-cbc",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "GlobalKnownHostsFile=/dev/null",
+    "-o", "PreferredAuthentications=keyboard-interactive,password",
+    "-o", "PubkeyAuthentication=no",
+    "-o", "NumberOfPasswordPrompts=1",
+    "-o", "ConnectTimeout=15",
+    "-o", "LogLevel=ERROR",
+]
+# Total wall-clock budget for a session, generous enough to wait for a push-MFA approval.
+_SSH_TIMEOUT = 150
 
 # Fixed read-only command set: (command, ntc-templates key). Unsupported commands on a given
 # platform simply return an "% Invalid input" banner we detect and skip (a router has no
@@ -232,3 +255,34 @@ def parse_transcript(transcript: str) -> dict:
         "data": {"tables": tables, "config": config, "raw": raw, "commands": COMMANDS,
                  "recognised": sorted(k for k in blocks if not _unsupported(blocks[k]))},
     }
+
+
+def collect(host: str, username: str, password: str) -> dict:
+    """Connect over READ-ONLY OpenSSH, run the allow-list, and return parsed tables.
+
+    The session sends the password once and then waits (up to `_SSH_TIMEOUT`) for the
+    device's auth backend to complete — this is where a push-MFA (Microsoft Authenticator)
+    approval happens out-of-band. The password is passed to sshpass via the SSHPASS env var
+    (never on argv, never stored, never logged). Only `show` commands are ever sent."""
+    cmds = ["terminal length 0"] + COMMANDS + ["exit"]
+    args = ["sshpass", "-e", "ssh", *_SSH_OPTS, f"{username}@{host}"]
+    env = dict(os.environ, SSHPASS=password)
+    try:
+        proc = subprocess.run(args, input="\n".join(cmds) + "\n", capture_output=True,
+                              text=True, timeout=_SSH_TIMEOUT, env=env)
+    except FileNotFoundError:
+        return {"status": "error", "message": "SSH client (openssh-client/sshpass) is not installed on the server."}
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "message": "Timed out waiting for the device — approval not received, or the device is slow."}
+    transcript = (proc.stdout or "") + (proc.stderr or "")
+    low = transcript.lower()
+    if "permission denied" in low or "authentication failed" in low:
+        return {"status": "auth_failed", "message": "Authentication failed (wrong password, or the MFA approval was declined/expired)."}
+    if any(t in low for t in ("unable to negotiate", "no matching", "connection timed out", "connection refused",
+                              "no route to host", "could not resolve", "operation timed out")):
+        return {"status": "unreachable", "message": "Network not available — could not reach the device on SSH."}
+    result = parse_transcript(transcript)
+    if result.get("status") != "ok":
+        # Connected but produced no parseable output (e.g. approval never completed).
+        result.setdefault("message", "Connected but no command output was returned.")
+    return result
