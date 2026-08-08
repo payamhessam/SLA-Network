@@ -54,8 +54,57 @@ _COMMANDS = [
     ("show ip route", "routes"),
     ("show power inline", "poe"),
     ("show environment all", "env"),
+    ("show logging", "logging"),
     ("show running-config", "config"),
 ]
+
+# Cisco severity levels (the N in %FACILITY-N-MNEMONIC).
+_SEV = {0: "Emergency", 1: "Alert", 2: "Critical", 3: "Error", 4: "Warning", 5: "Notice", 6: "Info", 7: "Debug"}
+
+# Read-only Cisco knowledge base: syslog mnemonic -> (plain-English cause, recommended action).
+# Matched by substring against the mnemonic so families (e.g. any *UPDOWN) resolve.
+_SYSLOG_KB = {
+    "UPDOWN": ("A link or line protocol changed state (interface up/down).",
+               "Check the cable/SFP and the neighbour on that port; if it flaps repeatedly, replace the transceiver or patch lead, or shut the port if unused."),
+    "CPUHOG": ("A process held the CPU too long — control-plane overload.",
+               "Identify the process with 'show processes cpu sorted'; review ACLs/SNMP/broadcast load and plan a code or capacity upgrade."),
+    "HIGHCPU": ("Sustained high CPU utilisation.",
+                "Use 'show processes cpu sorted' to find the offender; check for loops, excessive logging, or SNMP polling."),
+    "MALLOCFAIL": ("The device failed to allocate memory — memory exhaustion.",
+                   "Free memory (remove unused features), schedule a maintenance reload, and evaluate a memory/software upgrade."),
+    "MEMORY": ("Low free memory.",
+               "Check 'show memory statistics'; reload during a maintenance window if it keeps degrading; consider a software upgrade."),
+    "THERMAL": ("A temperature sensor crossed a threshold — thermal risk.",
+                "Inspect airflow, fans and ambient/rack temperature immediately; clear obstructions; replace a failed fan tray."),
+    "FAN": ("A fan failed or is degraded.",
+            "Replace the fan tray; verify airflow and ambient temperature until resolved."),
+    "PbENVMON": ("Environmental monitor alarm (temperature/fan/power).",
+                 "Check 'show environment all'; address the specific failing sensor (cooling or power)."),
+    "PSU": ("A power supply fault or redundancy loss.",
+            "Verify both feeds and PSUs; replace the failed unit to restore N+1 redundancy."),
+    "PWR": ("A power event was logged.",
+            "Check 'show power' / 'show environment power'; confirm both supplies are online."),
+    "ILPOWER": ("A PoE (inline power) event on a port.",
+                "Check the powered device and 'show power inline'; a controller/AP may have lost power — verify the budget and cabling."),
+    "STACKMGR": ("A stack member changed state (join/leave/reload).",
+                 "Confirm all members are up with 'show switch'; check stack cables and member power if a member dropped."),
+    "SPANTREE": ("A spanning-tree event — possible loop, BPDU guard, or topology change.",
+                 "Investigate immediately for a bridging loop; check for unauthorised switches and confirm root bridge placement."),
+    "PSECURE_VIOLATION": ("A port-security violation — an unexpected MAC appeared.",
+                          "Identify the offending MAC/port; if legitimate, adjust the allowed list, otherwise treat as a security event."),
+    "ADJCHG": ("An OSPF adjacency changed state.",
+               "Check the neighbour and the interconnecting link/interface for flaps or MTU/auth mismatches."),
+    "ADJCHANGE": ("A BGP peer changed state.",
+                  "Verify the peer reachability, session config, and any upstream link issues."),
+    "NBRCHANGE": ("An EIGRP neighbour changed state.",
+                  "Check the link to the neighbour for flaps, MTU or authentication mismatches."),
+    "DUPADDR": ("A duplicate IP address was detected.",
+                "Locate and remove the conflicting host; verify DHCP scopes and static assignments."),
+    "CONFIG": ("The running configuration was changed.",
+               "Review who/what changed it ('show archive log config all' / AAA logs); confirm it was authorised."),
+    "LOGIN_FAILED": ("Failed login attempt(s).",
+                     "If repeated, investigate for brute force; confirm source and lock down management access."),
+}
 
 # The ready-to-copy block the admin runs in their own (MFA-authenticated) SSH session.
 SCRIPT = "terminal length 0\n" + "\n".join(c for c, _ in _COMMANDS)
@@ -71,8 +120,23 @@ GAP_COMMANDS = {
     "OSPF Neighbors": ["show ip ospf neighbor"],
     "Environmental and PoE": ["show environment all", "show power inline"],
     "Configuration Backups": ["show running-config"],
+    "Alerts / recommendations": ["show logging"],
     "Routing (BGP/EIGRP/static)": ["show ip route", "show ip bgp summary", "show ip eigrp neighbors"],
 }
+
+
+def _recommend(mnemonic: str, severity: int) -> tuple[str, str]:
+    """Look up a syslog mnemonic in the Cisco knowledge base; fall back to a severity-based
+    generic recommendation. Returns (likely cause, recommended action)."""
+    up = (mnemonic or "").upper()
+    for key, (cause, action) in _SYSLOG_KB.items():
+        if key in up:
+            return cause, action
+    if severity <= 2:
+        return "A critical device event was logged.", "Investigate this event now; correlate with interface/power/temperature state and engage on-call if service is affected."
+    if severity == 3:
+        return "An error condition was logged.", "Review the message context and the affected component; remediate before it escalates."
+    return "A notable event was logged.", "Monitor; act if it recurs or correlates with a service impact."
 
 _INVALID = ("% invalid input", "% incomplete", "% ambiguous", "% unrecognized", "invalid input detected")
 
@@ -226,6 +290,48 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
                          "Fan RPM": r.get("speed") or r.get("fan_speed"), "Watts": r.get("power"), "Details": r.get("reading")})
     if env_rows:
         tables["Environmental and PoE"] = env_rows
+
+    # Alerts + Recommendations — parse the device syslog (show logging), read-only.
+    log_raw = raw.get("logging", "")
+    alert_rows, recs = [], []
+    if log_raw and not _unsupported(log_raw):
+        # %FACILITY-SEVERITY-MNEMONIC: message  (optionally prefixed by a timestamp)
+        pat = re.compile(r"(?P<ts>[*.]?\w{3}\s+\d+\s+[\d:.]+)?[^%]*%(?P<fac>[A-Z0-9_]+)-(?P<sev>\d)-(?P<mnem>[A-Z0-9_]+):\s*(?P<msg>.+)")
+        seen: dict[tuple, dict] = {}
+        for line in log_raw.splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
+            sev = int(m.group("sev")); fac = m.group("fac"); mnem = m.group("mnem"); msg = m.group("msg").strip()
+            alert_rows.append({"Severity": _SEV.get(sev, str(sev)), "Source": fac, "Instance": mnem,
+                               "Message": msg[:200], "Age": (m.group("ts") or "").strip(), "Acknowledged": "—"})
+            key = (fac, mnem)
+            entry = seen.get(key)
+            if entry is None:
+                cause, action = _recommend(f"{fac} {mnem}", sev)  # match KB on facility + mnemonic
+                seen[key] = {"sev": sev, "count": 1, "fac": fac, "mnem": mnem, "cause": cause, "action": action, "sample": msg[:160]}
+            else:
+                entry["count"] += 1
+                entry["sev"] = min(entry["sev"], sev)
+        alert_rows = alert_rows[-120:][::-1]  # most-recent first, capped
+        # Build prioritised recommendations from the distinct actionable events (sev<=4).
+        for e in sorted((v for v in seen.values() if v["sev"] <= 4), key=lambda v: (v["sev"], -v["count"]))[:15]:
+            pr = "P1" if e["sev"] <= 2 else ("P2" if e["sev"] == 3 else "P3")
+            recs.append({"Priority": pr, "Severity": _SEV.get(e["sev"], str(e["sev"])),
+                         "Finding": f"{e['count']}x %{e['fac']}-{e['sev']}-{e['mnem']}", "Likely cause": e["cause"],
+                         "Recommended action": e["action"], "Latest message": e["sample"]})
+    # Interface-error and environment findings feed the recommendation panel too.
+    bad_ifs = [k for k, v in (if_status or {}).items()
+               if str(v.get("FCS/CRC Errors") or "0").strip() not in ("0", "", "None") or str(v.get("Align Errors") or "0").strip() not in ("0", "", "None")]
+    if bad_ifs:
+        recs.append({"Priority": "P2", "Severity": "Error", "Finding": f"{len(bad_ifs)} interface(s) with FCS/CRC or alignment errors",
+                     "Likely cause": "Physical-layer problem (bad cable/SFP, duplex mismatch, or EMI).",
+                     "Recommended action": f"Inspect {', '.join(bad_ifs[:6])}: reseat/replace the cable or transceiver and confirm duplex/speed autoneg.",
+                     "Latest message": ""})
+    if alert_rows:
+        tables["Alerts"] = alert_rows
+    if recs:
+        tables["Recommendations (SSH)"] = recs
 
     config = raw.get("config")
     if config and not _unsupported(config):
