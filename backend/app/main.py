@@ -45,6 +45,14 @@ app.include_router(wan_router)
 
 @app.on_event("startup")
 async def startup():
+    # Production safety gate: refuse to start with development defaults when
+    # environment=production, so a real deployment can never run with dev credentials.
+    issues = settings.production_issues()
+    if issues:
+        msg = "Insecure production configuration:\n  - " + "\n  - ".join(issues)
+        if settings.is_production:
+            raise RuntimeError(msg + "\nFix these before starting in production.")
+        logging.getLogger("startup").warning("%s\n(development mode — not enforced)", msg)
     Base.metadata.create_all(engine)
     if engine.dialect.name == "postgresql":
         with engine.begin() as conn:
@@ -81,7 +89,7 @@ async def shutdown():
 async def secure_headers(request: Request, call_next):
     request.state.request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     response = await call_next(request)
-    response.headers.update({"X-Content-Type-Options":"nosniff", "X-Frame-Options":"DENY", "Referrer-Policy":"no-referrer", "Permissions-Policy":"camera=(), microphone=(), geolocation=()", "Content-Security-Policy":"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'", "X-Request-ID":request.state.request_id})
+    response.headers.update({"X-Content-Type-Options":"nosniff", "X-Frame-Options":"DENY", "Referrer-Policy":"no-referrer", "Permissions-Policy":"camera=(), microphone=(), geolocation=()", "Content-Security-Policy":"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'", "Cross-Origin-Opener-Policy":"same-origin", "Cross-Origin-Resource-Policy":"same-origin", "Strict-Transport-Security":"max-age=63072000; includeSubDomains", "X-Request-ID":request.state.request_id})
     return response
 
 
@@ -105,6 +113,15 @@ def me(user=Depends(current_user)):
 def health(db: Session = Depends(session)):
     db.execute(select(func.count(Device.id))).scalar()
     return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.0.0"}
+
+
+@app.get("/api/v1/readiness")
+def readiness(user=Depends(administrator)):
+    """Admin-only: production-configuration readiness — lists blocking issues (default
+    credentials, localhost CORS, SQLite, etc.) so ops can confirm before go-live."""
+    issues = settings.production_issues()
+    return {"environment": settings.environment, "is_production": settings.is_production,
+            "ready": not issues, "issues": issues}
 
 
 @app.get("/api/v1/dashboard")

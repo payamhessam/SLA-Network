@@ -14,8 +14,17 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Placeholder values that must never be used in production. `production_issues()` checks
+# for these and refuses to start when environment=production, so a real deployment cannot
+# accidentally run with development credentials.
+_DEV_JWT = "development-only-change-me"
+_DEV_ADMIN = "change-this-development-password"
+_DEV_USER = "change-this-viewer-password"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    environment: str = "development"  # set to "production" to enforce the hardening checks
     database_url: str = "sqlite:////data/network_sla.db"
     lm_portal_url: str = ""
     lm_access_id: str = ""
@@ -64,6 +73,27 @@ class Settings(BaseSettings):
     def admin_password(self): return self.secret(self.local_admin_password, self.local_admin_password_file)
     @property
     def user_password(self): return self.secret(self.local_user_password, self.local_user_password_file)
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
+
+    def production_issues(self) -> list[str]:
+        """Return blocking misconfigurations for a production deployment (empty = OK)."""
+        issues = []
+        if self.signing_secret in ("", _DEV_JWT) or len(self.signing_secret) < 32:
+            issues.append("JWT signing secret is the development default or shorter than 32 chars.")
+        if self.admin_password in ("", _DEV_ADMIN):
+            issues.append("Administrator password is still the development default.")
+        if self.user_password in ("", _DEV_USER):
+            issues.append("Read-only viewer password is still the development default.")
+        if self.admin_password == self.user_password:
+            issues.append("Administrator and viewer passwords must differ.")
+        if "localhost" in self.allowed_origins or "127.0.0.1" in self.allowed_origins:
+            issues.append("CORS allowed_origins still points at localhost.")
+        if self.database_url.startswith("sqlite"):
+            issues.append("Database is SQLite; use PostgreSQL for production.")
+        return issues
 
 
 @lru_cache
