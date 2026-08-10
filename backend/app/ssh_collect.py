@@ -52,6 +52,9 @@ _COMMANDS = [
     ("show ip bgp summary", "bgp"),
     ("show ip eigrp neighbors", "eigrp"),
     ("show ip route", "routes"),
+    ("show ip route 0.0.0.0", "route_default"),
+    ("show standby brief", "standby"),
+    ("show etherchannel summary", "etherchannel"),
     ("show power inline", "poe"),
     ("show environment all", "env"),
     ("show logging", "logging"),
@@ -285,6 +288,9 @@ GAP_COMMANDS = {
     "Configuration Backups": ["show running-config"],
     "Alerts / recommendations": ["show logging"],
     "Routing (BGP/EIGRP/static)": ["show ip route", "show ip bgp summary", "show ip eigrp neighbors"],
+    "Default Gateway": ["show ip route 0.0.0.0"],
+    "Gateway Redundancy (HSRP/VRRP)": ["show standby brief"],
+    "EtherChannel / Trunk Bundles": ["show etherchannel summary"],
 }
 
 
@@ -455,6 +461,42 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
              for r in _rows(parsed.get("eigrp"))]
     if eigrp:
         tables["EIGRP Neighbors (SSH)"] = eigrp
+
+    # Default gateway — the default-route candidates ranked by administrative distance then metric.
+    # Feeds branch failover/priority analysis (which uplink/circuit is primary/secondary/tertiary).
+    default_rows = []
+    for r in _rows(parsed.get("routes")):
+        if str(r.get("network", "")).startswith("0.0.0.0"):
+            ad = r.get("distance"); metric = r.get("metric")
+            default_rows.append({"Protocol": r.get("protocol"), "Prefix": "0.0.0.0/0",
+                                 "Next Hop": r.get("nexthop_ip") or r.get("nexthop_if"),
+                                 "Distance": ad, "Metric": metric,
+                                 "Distance/Metric": f"{ad if ad is not None else ''}/{metric if metric is not None else ''}"})
+    # ordered candidates (lowest AD, then metric = most preferred = primary)
+    def _rank(v):
+        try: return float(v)
+        except (TypeError, ValueError): return float("inf")
+    default_rows.sort(key=lambda x: (_rank(x["Distance"]), _rank(x["Metric"])))
+    for i, row in enumerate(default_rows, 1):
+        row["Priority"] = i
+    if default_rows:
+        tables["Default Gateway"] = default_rows
+
+    # Gateway redundancy — HSRP/VRRP groups (show standby brief): which device holds the virtual IP.
+    fhrp = [{"Interface": r.get("interface"), "Group": r.get("group"), "Priority": r.get("priority"),
+             "Preempt": r.get("preempt"), "State": r.get("state"), "Active": r.get("active"),
+             "Standby": r.get("standby"), "Virtual IP": r.get("virtual_ip_address")}
+            for r in _rows(parsed.get("standby"))]
+    if fhrp:
+        tables["Gateway Redundancy"] = fhrp
+
+    # EtherChannel — port-channel bundles (trunk redundancy across physical members).
+    etherchannel = [{"Group": r.get("group"), "Port-channel": r.get("bundle_name"),
+                     "Status": (r.get("bundle_status") or "").strip() or None, "Protocol": r.get("bundle_protocol"),
+                     "Members": _joined(r.get("member_interface"))}
+                    for r in _rows(parsed.get("etherchannel"))]
+    if etherchannel:
+        tables["EtherChannel"] = etherchannel
 
     # Spanning tree — parse the per-VLAN counts from `show spanning-tree summary`
     stp_raw = raw.get("stp", "")

@@ -215,8 +215,15 @@ async def refresh_recent(days_back: int = 1) -> dict:
 # ---- window aggregation (read-only, from the stored rollup) ----
 
 def _window_bounds(kind: str, ref: date) -> tuple[date, date]:
+    if kind == "rolling_7":
+        # trailing 7 days incl. today ("last Wednesday -> now") — always a full week of data
+        return ref - timedelta(days=6), ref
     if kind == "wtd":
         return ref - timedelta(days=ref.weekday()), ref
+    if kind == "prev_week":
+        # the last COMPLETE calendar week: previous Monday -> previous Sunday
+        this_monday = ref - timedelta(days=ref.weekday())
+        return this_monday - timedelta(days=7), this_monday - timedelta(days=1)
     if kind == "mtd":
         return ref.replace(day=1), ref
     if kind == "qtd":
@@ -286,7 +293,7 @@ def window(db: Session, device_id: int, start: date, end: date) -> dict:
 def device_sla(db: Session, device_id: int) -> dict:
     ref = today_local()
     out = {}
-    for kind in ("wtd", "mtd", "qtd", "rolling_30", "ytd"):
+    for kind in ("rolling_7", "wtd", "prev_week", "mtd", "qtd", "rolling_30", "ytd"):
         start, end = _window_bounds(kind, ref)
         out[kind] = window(db, device_id, start, end)
     return out
@@ -301,6 +308,8 @@ def fleet_sla(db: Session) -> dict:
     wtd_rows: list[SlaDaily] = []
     ys, ye = _window_bounds("ytd", ref)
     ws, we = _window_bounds("wtd", ref)
+    rs, re_ = _window_bounds("rolling_7", ref)
+    ps, pe = _window_bounds("prev_week", ref)
     below = 0
     # Load every device's YTD rows (WTD is a subset) in ONE query, then window in memory.
     dev_ids = [d.id for d in devices]
@@ -318,7 +327,8 @@ def fleet_sla(db: Session) -> dict:
         drows = by_dev.get(d.id, [])
         dy = _win(drows, ys, ye)
         dw = _win(drows, ws, we)
-        entries.append({"device_id": d.id, "lm_device_id": d.lm_device_id, "hostname": d.hostname, "site": d.site, "wtd": dw, "ytd": dy})
+        entries.append({"device_id": d.id, "lm_device_id": d.lm_device_id, "hostname": d.hostname, "site": d.site,
+                        "rolling_7": _win(drows, rs, re_), "wtd": dw, "prev_week": _win(drows, ps, pe), "ytd": dy})
         ytd_rows += drows
         wtd_rows += [r for r in drows if ws <= r.day <= we]
         if dy["availability"] is not None and dy["availability"] < target:

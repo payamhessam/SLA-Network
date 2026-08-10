@@ -348,16 +348,74 @@ def throughput(db: Session, fleet: list[dict]) -> dict:
             if str(r.get("Status")) != "up":
                 continue
             speed = _numlike(r.get("Speed"))
-            util = max(_numlike(r.get("In Utilization %")) or 0.0, _numlike(r.get("Out Utilization %")) or 0.0)
+            # Count both directions: total bits moved on the link = in + out (bidirectional).
+            in_out = (_numlike(r.get("In Utilization %")) or 0.0) + (_numlike(r.get("Out Utilization %")) or 0.0)
             if speed and speed > 0:
-                total_bps += speed * util / 100.0
+                total_bps += speed * in_out / 100.0
                 counted += 1
     if counted == 0:
         return {"available": False, "reason": "No interface utilisation/speed collected yet.", "value": None, "unit": None}
     gbps = total_bps / 1e9
     value, unit = (round(gbps, 2), "Gbps") if gbps >= 1 else (round(total_bps / 1e6, 1), "Mbps")
     return {"available": True, "value": value, "unit": unit, "interfaces": counted,
-            "note": "Aggregate across all monitored up interfaces (speed x utilisation)."}
+            "label": "Snapshot utilisation (instant)",
+            "note": ("Point-in-time in+out across all monitored up interfaces at the last poll — "
+                     "not a busy-hour or average. See Path Resilience for the windowed peak/average.")}
+
+
+def _iface_bps(details) -> float:
+    """Aggregate in+out bits/sec across up interfaces of one snapshot (speed x utilisation)."""
+    rows = (details or {}).get("tables", {}).get("Interfaces", []) if isinstance(details, dict) else []
+    total = 0.0
+    for r in rows or []:
+        if str(r.get("Status")) != "up":
+            continue
+        sp = _numlike(r.get("Speed"))
+        io = (_numlike(r.get("In Utilization %")) or 0.0) + (_numlike(r.get("Out Utilization %")) or 0.0)
+        if sp and sp > 0:
+            total += sp * io / 100.0
+    return total
+
+
+def _scale_bps(bps: float) -> dict:
+    g = bps / 1e9
+    return {"value": round(g, 2), "unit": "Gbps"} if g >= 1 else {"value": round(bps / 1e6, 1), "unit": "Mbps"}
+
+
+def throughput_window(db: Session, hours: int = 24) -> dict:
+    """Windowed fleet throughput (in+out) from stored snapshot history: hourly buckets over
+    the last `hours`, each device carried forward to the next bucket, then average / peak / p95.
+    Real average+busy-hour figure (unlike the instantaneous card), from data already collected."""
+    hours = max(1, min(int(hours or 24), 24 * 30))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=hours)
+    snaps = db.scalars(select(Snapshot).where(Snapshot.collected_at >= start).order_by(Snapshot.collected_at)).all()
+    if not snaps:
+        return {"available": False, "reason": "No snapshot history in the window yet.", "hours": hours}
+    buckets: dict[datetime, dict[int, float]] = {}
+    devices: set[int] = set()
+    for s in snaps:
+        hb = s.collected_at.replace(minute=0, second=0, microsecond=0)
+        buckets.setdefault(hb, {})[s.device_id] = _iface_bps(s.details)  # latest snapshot in the hour wins
+        devices.add(s.device_id)
+    last: dict[int, float] = {}
+    series = []
+    for hb in sorted(buckets):
+        last.update(buckets[hb])
+        fleet = sum(last.get(d, 0.0) for d in devices)
+        series.append((hb, fleet))
+    vals = [v for _, v in series]
+    vals_sorted = sorted(vals)
+    avg = sum(vals) / len(vals)
+    peak = max(vals)
+    p95 = vals_sorted[min(len(vals_sorted) - 1, int(len(vals_sorted) * 0.95))]
+    return {
+        "available": True, "hours": hours, "buckets": len(series),
+        "average": _scale_bps(avg), "peak": _scale_bps(peak), "p95": _scale_bps(p95),
+        "series": [{"t": hb.isoformat(), "gbps": round(v / 1e9, 3)} for hb, v in series],
+        "note": ("In+out across all monitored up interfaces, hourly over the window (snapshots carried "
+                 "forward). Fleet aggregate — WAN-egress-only split pending interface classification."),
+    }
 
 
 def executive_actions(db: Session, fleet: list[dict], gsla: dict) -> list[dict]:

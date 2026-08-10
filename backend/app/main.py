@@ -32,7 +32,7 @@ from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop
 from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
-from . import overview, reports, resilience, sla, ssh_collect, telemetry, trends
+from . import overview, pathres, reports, resilience, sla, ssh_collect, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 # Disable the interactive docs and OpenAPI schema in production (no API surface disclosure).
@@ -116,6 +116,20 @@ def me(user=Depends(current_user)):
 def health(db: Session = Depends(session)):
     db.execute(select(func.count(Device.id))).scalar()
     return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.0.0"}
+
+
+@app.get("/api/v1/path-resilience")
+def path_resilience(site: str | None = None, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: per-branch provider & path resilience (availability windows, failover
+    posture, priority routes). Optional ?site=CA15 to focus one branch."""
+    return pathres.build(db, site_code=site)
+
+
+@app.get("/api/v1/throughput/window")
+def throughput_window(hours: int = 24, user=Depends(administrator), db: Session = Depends(session)):
+    """Admin-only: windowed fleet throughput (average / busy-hour peak / p95, in+out) from
+    stored snapshot history — the real 'how loaded is the network' figure. ?hours=24|168."""
+    return overview.throughput_window(db, hours=hours)
 
 
 @app.get("/api/v1/readiness")

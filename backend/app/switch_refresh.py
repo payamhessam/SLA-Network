@@ -94,6 +94,33 @@ async def refresh_switch_locked(db: Session, row: InventoryDevice, actor: str) -
         return await refresh_switch(db, row, actor)
 
 
+_bg_tasks: set = set()
+
+
+async def _refresh_bg(inventory_id: int, actor: str) -> None:
+    try:
+        with SessionLocal() as db:
+            row = db.get(InventoryDevice, inventory_id)
+            if row and row.logicmonitor_device_id:
+                await refresh_switch_locked(db, row, actor)
+                db.commit()
+    except Exception as exc:  # never surface a background failure to the user
+        logger.warning("Background open-detail refresh failed for inventory %s (%s)", inventory_id, type(exc).__name__)
+
+
+def schedule_refresh(inventory_id: int, actor: str) -> bool:
+    """Fire-and-forget a LogicMonitor refresh on the event loop so the detail view can
+    open instantly from the last snapshot. Returns False if no loop is running."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    task = loop.create_task(_refresh_bg(inventory_id, actor))
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return True
+
+
 async def refresh_all_switches() -> dict:
     """Refresh every enabled, LogicMonitor-mapped device in Device Fleet (all types:
     DSW, ASW, RTR, DAS, INR, ...), every 30 minutes in the background."""

@@ -27,7 +27,7 @@ from .auth import administrator, current_user
 from .collection import collect_logicmonitor_device, latest
 from .db import AuditEvent, Device, ImportJob, InventoryDevice, InventoryDeviceType, Site, Snapshot, Zone, session
 from .logicmonitor import LogicMonitorClient
-from .switch_refresh import refresh_switch_locked
+from .switch_refresh import refresh_switch_locked, schedule_refresh
 
 router = APIRouter(prefix="/api/v1")
 SITE_CODE = re.compile(r"^[A-Z0-9]{2,10}$")
@@ -329,13 +329,20 @@ async def open_inventory_detail(item_id:int,user=Depends(current_user),db:Sessio
     if not row: raise HTTPException(404,"Device not found")
     if not row.logicmonitor_device_id:
         raise HTTPException(409,"Device is not mapped to LogicMonitor")
-    try:
-        legacy=await refresh_switch_locked(db,row,user["sub"])
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(502,detail={"message":"LogicMonitor switch refresh failed","category":type(exc).__name__})
+    legacy=db.scalar(select(Device).where(or_(Device.lm_device_id==row.logicmonitor_device_id, func.lower(Device.hostname)==row.generated_name.lower())))
+    # Instant open: if we already hold a snapshot, return it now and refresh in the background
+    # (a full live LogicMonitor refresh takes 60-130s and made the detail view look frozen).
+    refreshing=False
+    if legacy and db.scalar(select(Snapshot.id).where(Snapshot.device_id==legacy.id).limit(1)):
+        refreshing=schedule_refresh(row.id,user["sub"])
+    else:
+        try:
+            legacy=await refresh_switch_locked(db,row,user["sub"])  # first-ever open: collect synchronously
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(502,detail={"message":"LogicMonitor switch refresh failed","category":type(exc).__name__})
     audit(db,user["sub"],"inventory.open_detail","inventory_device",row.id,new={"legacy_device_id":legacy.id});db.commit();db.refresh(legacy)
-    return {"device":{"id":legacy.id,"hostname":legacy.hostname,"management_ip":legacy.management_ip,"site":legacy.site,"role":legacy.role,"criticality":legacy.criticality,"device_type":legacy.device_type,"model":legacy.model,"active":legacy.active,"notes":legacy.notes,"lm_device_id":legacy.lm_device_id,"match_status":legacy.match_status}}
+    return {"device":{"id":legacy.id,"hostname":legacy.hostname,"management_ip":legacy.management_ip,"site":legacy.site,"role":legacy.role,"criticality":legacy.criticality,"device_type":legacy.device_type,"model":legacy.model,"active":legacy.active,"notes":legacy.notes,"lm_device_id":legacy.lm_device_id,"match_status":legacy.match_status},"refreshing":refreshing}
 
 
 def save_device(body:InventoryIn,user,db,row=None,commit=True):
