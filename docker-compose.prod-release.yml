@@ -1,0 +1,53 @@
+# Production compose for a released package (image-based; no build context needed).
+# Copied into the release folder as docker-compose.yml by scripts/build-release.ps1.
+services:
+  postgres:
+    image: postgres:16.9-alpine3.22
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: network_sla
+      POSTGRES_USER: network_sla
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck: {test: [CMD-SHELL, "pg_isready -U network_sla"], interval: 10s, timeout: 5s, retries: 5}
+    networks: [internal]
+
+  api:
+    image: sla-network-api:1.0.0
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+psycopg://network_sla:${POSTGRES_PASSWORD}@postgres:5432/network_sla
+      LM_PORTAL_URL: ${LM_PORTAL_URL:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+      LM_ACCESS_ID_FILE: /run/secrets/lm_access_id
+      LM_ACCESS_KEY_FILE: /run/secrets/lm_access_key
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      LOCAL_ADMIN_PASSWORD_FILE: /run/secrets/local_admin_password
+      LOCAL_USER_PASSWORD_FILE: /run/secrets/local_user_password
+    secrets: [lm_access_id, lm_access_key, jwt_secret, local_admin_password, local_user_password]
+    volumes: [report_data:/reports, upload_data:/data]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+
+  frontend:
+    image: sla-network-web:1.0.0
+    restart: unless-stopped
+    ports: ["80:8080"]   # production is reached on port 80
+    depends_on: {api: {condition: service_healthy}}
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    security_opt: [no-new-privileges:true]
+
+volumes: {postgres_data: {}, report_data: {}, upload_data: {}}
+networks: {internal: {}}
+secrets:
+  lm_access_id: {file: ./secrets/lm_access_id.txt}
+  lm_access_key: {file: ./secrets/lm_access_key.txt}
+  jwt_secret: {file: ./secrets/jwt_secret.txt}
+  local_admin_password: {file: ./secrets/local_admin_password.txt}
+  local_user_password: {file: ./secrets/local_user_password.txt}

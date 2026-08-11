@@ -3,11 +3,17 @@
 `refresh_switch` re-collects one mapped Fleet device and writes a fresh Snapshot plus
 an audit event; `refresh_all_switches` walks every enabled, mapped device (all types:
 DSW/ASW/RTR/DAS/INR/...) and is run on a timer by `switch_refresh_loop` every
-`switch_collection_interval_minutes` (30 by default). A module-level asyncio lock
-serialises refreshes so a manual refresh and the background loop can't collide.
+`switch_collection_interval_minutes` (30 by default). Locking is PER-DEVICE, not one
+global lock: the only reason to serialise two refreshes of the SAME device is to avoid a
+create-if-missing race on its legacy Device row. A single global lock used to also
+serialise every on-demand "open detail" refresh behind the entire fleet sweep — right
+after a restart (the fleet loop now runs immediately, not sleep-first) a user's
+instant-open background refresh could silently queue for tens of minutes waiting for an
+unrelated device's turn, defeating the point of opening instantly.
 """
 import asyncio
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
@@ -19,7 +25,11 @@ from .db import AuditEvent, Device, InventoryDevice, InventoryDeviceType, Sessio
 from .logicmonitor import LogicMonitorClient
 
 logger = logging.getLogger(__name__)
-_refresh_lock = asyncio.Lock()
+_device_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def _lock_for(inventory_id: int) -> asyncio.Lock:
+    return _device_locks[inventory_id]
 
 
 async def refresh_switch(db: Session, row: InventoryDevice, actor: str) -> Device:
@@ -90,7 +100,7 @@ async def refresh_switch(db: Session, row: InventoryDevice, actor: str) -> Devic
 
 
 async def refresh_switch_locked(db: Session, row: InventoryDevice, actor: str) -> Device:
-    async with _refresh_lock:
+    async with _lock_for(row.id):
         return await refresh_switch(db, row, actor)
 
 
@@ -124,29 +134,32 @@ def schedule_refresh(inventory_id: int, actor: str) -> bool:
 async def refresh_all_switches() -> dict:
     """Refresh every enabled, LogicMonitor-mapped device in Device Fleet (all types:
     DSW, ASW, RTR, DAS, INR, ...), every 30 minutes in the background."""
-    async with _refresh_lock:
-        with SessionLocal() as db:
-            rows = db.scalars(
-                select(InventoryDevice)
-                .join(InventoryDeviceType)
-                .where(
-                    InventoryDevice.enabled.is_(True),
-                    InventoryDevice.logicmonitor_device_id.is_not(None),
-                )
-                .order_by(InventoryDevice.id)
-            ).all()
-            collected = 0
-            failures = 0
-            for row in rows:
-                try:
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(InventoryDevice)
+            .join(InventoryDeviceType)
+            .where(
+                InventoryDevice.enabled.is_(True),
+                InventoryDevice.logicmonitor_device_id.is_not(None),
+            )
+            .order_by(InventoryDevice.id)
+        ).all()
+        collected = 0
+        failures = 0
+        for row in rows:
+            try:
+                # Per-device lock: only blocks a concurrent on-demand refresh of THIS SAME
+                # device, not the whole fleet sweep. A user opening a different device's
+                # detail page is never queued behind this loop.
+                async with _lock_for(row.id):
                     await refresh_switch(db, row, "background-collector")
-                    db.commit()
-                    collected += 1
-                except Exception as exc:
-                    db.rollback()
-                    failures += 1
-                    logger.warning("Background switch refresh failed for inventory id %s (%s)", row.id, type(exc).__name__)
-            return {"requested": len(rows), "collected": collected, "failures": failures}
+                db.commit()
+                collected += 1
+            except Exception as exc:
+                db.rollback()
+                failures += 1
+                logger.warning("Background switch refresh failed for inventory id %s (%s)", row.id, type(exc).__name__)
+        return {"requested": len(rows), "collected": collected, "failures": failures}
 
 
 async def switch_refresh_loop() -> None:

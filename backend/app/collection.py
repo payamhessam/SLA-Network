@@ -83,7 +83,17 @@ async def collect_logicmonitor_device(client: LogicMonitorClient, local, remote)
 
     sensor_rows=[]
     for inst,data in results["Cisco_Entity_Sensors"][1]:
-        value=latest(data); sensor_rows.append({"Category":"Sensor","Switch/Module":"Cisco","Component/Interface":inst.get("displayName") or inst.get("name"),"State":"Normal" if value.get("sensor_status")==1 else "Unknown","Temperature C":value.get("sensor_value"),"Fan RPM":None,"Watts":None,"Details":inst.get("description")})
+        value=latest(data)
+        # Cisco_Entity_Sensors is a GENERIC entity-sensor datasource: one instance per sensor,
+        # covering temperature AND voltage AND fan-RPM readings on the same "sensor_value"
+        # field. Every instance was being labelled "Temperature C" regardless of what it
+        # actually measured, so a fan running at 11,520 RPM or a 3.3v rail reading 3.3 both
+        # got treated as a temperature — producing an executive report claiming 11,760C.
+        # Only keep this as a temperature reading when the instance name says it is one.
+        name=str(inst.get("displayName") or inst.get("name") or "")
+        raw_value=value.get("sensor_value")
+        is_temp_sensor=("temp" in name.lower()) and isinstance(raw_value,(int,float)) and -50<=raw_value<=150
+        sensor_rows.append({"Category":"Sensor","Switch/Module":"Cisco","Component/Interface":name,"State":"Normal" if value.get("sensor_status")==1 else "Unknown","Temperature C":raw_value if is_temp_sensor else None,"Fan RPM":raw_value if "fan" in name.lower() else None,"Watts":None,"Details":inst.get("description")})
     temperatures=[x["Temperature C"] for x in sensor_rows if isinstance(x["Temperature C"],(int,float))]
     for inst,data in results["CiscoFan-"][1]:
         value=latest(data); sensor_rows.append({"Category":"Fan","Switch/Module":"Cisco","Component/Interface":inst.get("displayName") or inst.get("name"),"State":"Normal" if value.get("Status")==1 else "Fault","Temperature C":None,"Fan RPM":None,"Watts":None,"Details":inst.get("description")})
