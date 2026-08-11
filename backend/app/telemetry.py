@@ -43,7 +43,7 @@ def routing(db: Session, fleet):
 
 
 def interfaces(db: Session, fleet):
-    total = up = down = high_util = with_errors = flapping = 0
+    total = up = down = disabled = unknown = high_util = with_errors = flapping = 0
     issues = []
     for d in fleet:
         for r in _tables(d).get("Interfaces", []) or []:
@@ -52,10 +52,22 @@ def interfaces(db: Session, fleet):
             util = max(_num(r.get("In Utilization %")) or 0, _num(r.get("Out Utilization %")) or 0)
             tx, rx = _num(r.get("TX Errors")), _num(r.get("RX Errors"))
             flaps = _num(r.get("Flaps"))
+            is_down_problem = st == "down" and adm == "up"
+            # Every interface lands in exactly one state bucket, so total always equals
+            # up + down + disabled + unknown - nothing silently disappears from the counts.
+            # "unknown" is common: LogicMonitor discovers far more interface instances than it
+            # actively polls operational status for (commonly unused/never-connected ports), so
+            # Status/Admin State come back as "unknown" rather than a fabricated up or down.
             if st == "up":
                 up += 1
-            if st == "down" and adm == "up":
-                down += 1; issues.append({"device_id": d["device_id"], "device": d["hostname"], "interface": r.get("Interface"), "issue": "DOWN (admin up)", "severity": "CRITICAL"})
+            elif is_down_problem:
+                down += 1
+            elif adm == "down":
+                disabled += 1
+            else:
+                unknown += 1
+            if is_down_problem:
+                issues.append({"device_id": d["device_id"], "device": d["hostname"], "interface": r.get("Interface"), "issue": "DOWN (admin up)", "severity": "CRITICAL"})
             elif util >= 90:
                 high_util += 1; issues.append({"device_id": d["device_id"], "device": d["hostname"], "interface": r.get("Interface"), "issue": f"{round(util)}% utilisation", "severity": "WARNING"})
             elif (tx and tx > 0) or (rx and rx > 0):
@@ -64,8 +76,8 @@ def interfaces(db: Session, fleet):
                 high_util += 1
             if flaps and flaps > 0:
                 flapping += 1
-    return {"total": total, "up": up, "down": down, "high_util": high_util,
-            "with_errors": with_errors, "flapping": flapping, "issues": issues[:25]}
+    return {"total": total, "up": up, "down": down, "disabled": disabled, "unknown": unknown,
+            "high_util": high_util, "with_errors": with_errors, "flapping": flapping, "issues": issues[:25]}
 
 
 def latency(db: Session, fleet):
