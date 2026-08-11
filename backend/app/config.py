@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     sla_backfill_start: str = "2026-01-01"
     availability_source: str = "Ping"
     sla_query_hours: int = 8
+    # Proactive client-side cap on LogicMonitor API calls. The portal reports its own budget
+    # via x-rate-limit-limit / x-rate-limit-window (measured: 700 requests per 60s). We stay
+    # deliberately below it so a large backfill cannot exhaust the tenant-wide budget that
+    # other LogicMonitor consumers (and live monitoring) also depend on. 0 disables the cap.
+    lm_rate_limit_per_minute: int = 500
 
     @field_validator("lm_portal_url")
     @classmethod

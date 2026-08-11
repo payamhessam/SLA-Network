@@ -15,6 +15,50 @@ _clients: dict[str, httpx.AsyncClient] = {}
 _clients_lock = asyncio.Lock()
 
 
+class _RateLimiter:
+    """Token bucket shared by every LogicMonitor request in this process.
+
+    LogicMonitor publishes a tenant-wide budget (measured on this portal:
+    x-rate-limit-limit 700 per x-rate-limit-window 60s). A full YTD backfill is ~27k
+    requests and, at CONCURRENCY=16 with ~450 ms round-trips, would otherwise offer
+    ~2,100 req/min — roughly 3x the budget. Reacting to the resulting 429s technically
+    works (see the retry path in get()), but it burns a budget that live monitoring and
+    other LogicMonitor consumers in the tenant share. This keeps us under the limit by
+    construction instead.
+    """
+
+    def __init__(self, per_minute: int):
+        self._rate = per_minute / 60.0            # tokens per second
+        self._capacity = max(1.0, per_minute / 6.0)  # allow a short burst (~10s worth)
+        self._tokens = self._capacity
+        self._updated = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                self._tokens = min(self._capacity, self._tokens + (now - self._updated) * self._rate)
+                self._updated = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) / self._rate
+            await asyncio.sleep(wait)
+
+
+_limiters: dict[int, _RateLimiter] = {}
+
+
+def _limiter(per_minute: int) -> _RateLimiter | None:
+    if per_minute <= 0:
+        return None  # explicitly disabled
+    lim = _limiters.get(per_minute)
+    if lim is None:
+        lim = _limiters[per_minute] = _RateLimiter(per_minute)
+    return lim
+
+
 async def _shared_client(base_url: str) -> httpx.AsyncClient:
     """One pooled, keep-alive client per portal so we don't pay a TLS handshake per request."""
     client = _clients.get(base_url)
@@ -53,9 +97,12 @@ class LogicMonitorClient:
     async def get(self, resource: str, params: dict | None = None):
         if not resource.startswith("/santaba/rest/"): raise ValueError("Unsupported LogicMonitor resource")
         client = await _shared_client(self.settings.lm_portal_url)
+        limiter = _limiter(getattr(self.settings, "lm_rate_limit_per_minute", 500))
         attempts = 0
         while True:
             attempts += 1
+            if limiter is not None:
+                await limiter.acquire()  # stay inside the tenant-wide LM budget by construction
             try:
                 response = await client.get(resource, params=params, headers=self._headers(resource))
             except (httpx.TimeoutException, httpx.TransportError):
