@@ -172,13 +172,15 @@ def build(db: Session, site_code: str | None = None) -> dict:
             continue
         b = branches.setdefault(sc, {"site_code": sc, "city": city, "region": region, "devices": [], "_dsw": None, "_dsw_ip": None, "_ids": []})
         snap = _latest_snap(db, legacy.id)
-        stack = 1
-        if snap and isinstance(snap.details, dict):
-            stack = snap.details.get("stack_members") or (snap.details.get("mapping", {}) or {}).get("stack_members") or 1
+        # Canonical physical-chassis count (same function Device Fleet's "Total Network
+        # Devices" and Overview's Site Reliability table use) so this branch's device count
+        # agrees with those pages instead of a locally-invented estimate.
+        physical, _src = resilience.physical_switch_count(snap.details) if snap else (None, None)
+        physical = physical or 1
         dev = {
             "name": inv.generated_name, "type": type_code, "role": inv.role,
             "management_ip": inv.management_ip, "legacy_id": legacy.id,
-            "status": snap.status if snap else "Unknown", "model": inv.model,
+            "status": snap.status if snap else "Unknown", "model": inv.model, "physical": physical,
         }
         b["devices"].append(dev)
         b["_ids"].append(legacy.id)
@@ -224,11 +226,12 @@ def build(db: Session, site_code: str | None = None) -> dict:
             provs = ", ".join(f"{c['provider']}{' (primary)' if c['is_primary'] else ''}" for c in wan)
             sev = "ok" if len(wan) >= 2 else "warning"
             failover.setdefault("findings", []).append({"severity": sev, "text": f"WAN circuits mapped: {provs}."})
-        # Device count reflects the whole branch: monitored inventory devices + access switches
-        # discovered via the DSW's CDP that aren't in inventory (same source as the "dual-homed" chip).
+        # Device count = sum of physical chassis (stack members counted individually), the
+        # SAME canonical figure as Device Fleet's "Total Network Devices" and Overview's Site
+        # Reliability table (backend.app.inventory.physical_switch_count). Using any other
+        # method here would make this page disagree with those two for no legitimate reason.
         monitored = len(b["_ids"])
-        access_via_cdp = failover.get("access_neighbors", 0)
-        device_total = monitored + max(0, access_via_cdp - max(0, monitored - 1))
+        device_total = sum(d["physical"] for d in b["devices"])
         out.append({
             "site_code": sc, "city": b["city"], "region": b["region"],
             "device_count": device_total, "monitored_count": monitored, "devices": b["devices"],

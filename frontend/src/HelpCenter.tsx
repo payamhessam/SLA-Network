@@ -10,9 +10,10 @@ import React,{useEffect,useMemo,useState} from 'react';
 import{Search,BookOpen,ArrowRight,HelpCircle,ListOrdered} from 'lucide-react';
 import{ARTICLES,CATEGORIES,GLOSSARY,FAQ,type Article} from './helpContent';
 import'./help.css';
+import{fmtPct}from'./format';
 
 const GLOSSARY_ID='__glossary', FAQ_ID='__faq', INDEX_ID='__index';
-const pct=(v:any)=>typeof v==='number'?v.toFixed(3)+'%':'Insufficient evidence';
+const pct=(v:any)=>typeof v==='number'?fmtPct(v):'Insufficient evidence';
 
 // Dynamic "Why this number?" text built from the live /help/explain payload.
 function whyLines(live:string,e:any):string[]{

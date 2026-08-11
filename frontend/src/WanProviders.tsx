@@ -13,11 +13,12 @@ import{Globe,LayoutGrid,List,MapPin,Plus,RefreshCw,Router as RouterIcon,Search,S
 import Help from'./Help';
 import{usePager,Pager}from'./Paged';
 import'./overview.css';
+import{fmtPct}from'./format';
 
 type Props={token:string;administrator:boolean};
 const badge=(s:string)=>{const x=(s||'').toLowerCase();if(x.includes('healthy')||x.includes('monitored')&&!x.includes('not'))return'ok';if(x.includes('warn')||x.includes('applied'))return'warn';if(x.includes('critical'))return'crit';return'unknown'};
 const num=(v:any,d=0)=>typeof v==='number'?v.toFixed(d):'—';
-const reach=(v:any)=>typeof v==='number'?v.toFixed(2)+'%':'—';
+const reach=(v:any)=>fmtPct(v);
 
 export default function WanProviders({token,administrator}:Props){
   const[ov,setOv]=useState<any>(null);const[rows,setRows]=useState<any[]>([]);

@@ -9,7 +9,7 @@
  * The code is intentionally dense; the <Help> tooltips and docs/APPLICATION.md explain
  * what each section means for end users.
  */
-import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{Activity,AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,Gauge,Globe,HelpCircle,LayoutDashboard,LockKeyhole,LogOut,MemoryStick,Moon,Network,Plus,Radio,RefreshCw,Route,Router,Server,Settings as SettingsIcon,ShieldCheck,Sun,Terminal,Trash2,Wifi}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import WanProviders from'./WanProviders'; import Help from'./Help'; import HelpCenter from'./HelpCenter'; import{usePager,Pager}from'./Paged'; import'./design-system.css'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css'; import'./overview.css'; import'./pathres.css';
+import React,{useEffect,useRef,useState} from 'react'; import{createRoot}from'react-dom/client'; import{Activity,AlertTriangle,ArrowLeft,ArrowRight,Clock,Cpu,Eye,EyeOff,FileDown,Gauge,Globe,HelpCircle,LayoutDashboard,LockKeyhole,LogOut,MemoryStick,Moon,Network,Plus,Radio,RefreshCw,Route,Router,Server,Settings as SettingsIcon,ShieldCheck,Sun,Terminal,Trash2,Wifi}from'lucide-react'; import InventoryFleet from'./InventoryFleet'; import AccessPoints from'./AccessPoints'; import WanProviders from'./WanProviders'; import Help from'./Help'; import HelpCenter from'./HelpCenter'; import{usePager,Pager}from'./Paged'; import'./design-system.css'; import'./style.css'; import'./detail.css'; import'./inventory.css'; import'./auth.css'; import'./overview.css'; import'./pathres.css'; import{fmtPct,fmtPctDelta}from'./format';
 const NAV_ICONS:Record<string,any>={'Overview':LayoutDashboard,'Device Fleet':Server,'Access Points':Wifi,'SLA & Resilience':Gauge,'Network Telemetry':Network,'WAN Providers':Globe,'Path Resilience':Route,'Help':HelpCircle,'Settings':SettingsIcon};
 type Device={id:number;hostname:string;management_ip?:string;site:string;role:string;criticality:string;device_type:string;model?:string;active:boolean;match_status:string};
 const getToken=()=>localStorage.getItem('token')||sessionStorage.getItem('token');
@@ -28,7 +28,7 @@ function PathResilience({administrator}:{administrator:boolean}){
   const submitSsh=async()=>{setSsh((s:any)=>({...s,busy:true,msg:''}));try{const r=await api(`/devices/${ssh.device_id}/manual-collect`,{method:'POST',body:JSON.stringify({transcript:ssh.transcript})});if(r.status==='ok'){setSsh(null);await load()}else{setSsh((s:any)=>({...s,busy:false,msg:r.message||'Could not parse the pasted output.'}))}}catch(x:any){setSsh((s:any)=>({...s,busy:false,msg:x.message}))}};
   if(err)return <div className="banner">{err}</div>;
   if(!data)return <div className="pr"><div className="pr-loading">Loading path resilience…</div></div>;
-  const pct=(v:any)=>v==null?'—':v.toFixed(3)+'%';
+  const pct=fmtPct;
   const B=data.branches;
   const fully=B.filter((b:any)=>b.posture.indexOf('Fully')===0).length;
   const singleL3=B.filter((b:any)=>b.failover.has_routing_evidence&&b.failover.northbound_paths<=1).length;
@@ -105,7 +105,7 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
   if(err)return <div className="ov"><div className="ov-summary"><p>{err}</p></div></div>;
   if(!o)return <div className="ov"><div className="ov-summary"><p>Loading executive overview…</p></div></div>;
   const openDev=(id:number|null)=>{if(id==null)return;const d=devices.find(x=>x.id===id);if(d)open(d);else navigate('Device Fleet')};
-  const pct2=(v:any)=>v==null?'—':Number(v).toFixed(2)+'%';const pct3=(v:any)=>v==null?'—':Number(v).toFixed(3)+'%';
+  const pct2=fmtPct,pct3=fmtPct; // single shared formatter (Number(v)+2dp, trailing zeros trimmed) — no longer two precisions
   const ago=(iso:string|null)=>{if(!iso)return '—';const s=(Date.now()-new Date(iso).getTime())/1000;if(s<90)return 'Just now';if(s<3600)return Math.round(s/60)+' min ago';if(s<86400)return Math.round(s/3600)+' h ago';return Math.round(s/86400)+' d ago'};
   const badge=(status:string)=>{const s=String(status).toUpperCase();return /CRIT|FAULT|DOWN/.test(s)?'crit':/HIGH|WARN|DEGRAD/.test(s)?'warn':/UNKNOWN|INSUFF/.test(s)?'unknown':'ok'};
   const stbg=(st:string)=>st==='unknown'?'var(--ov-surface-high)':`var(--ov-${st}-bg)`;const stfg=(st:string)=>st==='unknown'?'var(--ov-faint)':`var(--ov-${st})`;
@@ -139,7 +139,7 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
           <svg viewBox="0 0 120 120" width="150" height="150"><circle cx="60" cy="60" r="52" fill="none" stroke="var(--ov-track)" strokeWidth="8"/><circle cx="60" cy="60" r="52" fill="none" stroke={slaColor} strokeWidth="8" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C*(1-frac)} transform="rotate(-90 60 60)"/></svg>
           <div style={{position:'absolute',inset:0,display:'grid',placeItems:'center'}}><div className="ov-ring-val" style={{color:slaColor}}>{pct2(g.current)}</div></div>
         </div>
-        <div className="ov-sub">Target {g.target}% · {g.delta!=null?(g.delta>=0?'+':'')+g.delta.toFixed(3)+'%':'—'}</div>
+        <div className="ov-sub">Target {g.target}% · {fmtPctDelta(g.delta)}</div>
         <span className={'ov-chip '+slaClass}>{g.status}</span>
       </div></div>
       <div className="ov-card"><h3>Device Criticality<Help text="All Device Fleet devices grouped by business criticality (Critical / High / Standard). The centre number is the total fleet size; the ring shows the mix. Set a device's criticality in Settings → Device Inventory."/></h3><div className="center">
@@ -149,7 +149,7 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
         </div>
         <div className="ov-legend"><span><i style={{background:'var(--ov-crit)'}}/>Crit {cr.bands.Critical}</span><span><i style={{background:'var(--ov-warn)'}}/>High {cr.bands.High}</span><span><i style={{background:'var(--ov-info)'}}/>Std {cr.bands.Standard}</span></div>
       </div></div>
-      <div className="ov-card"><h3>7-Day Availability<Help text="Fleet availability for each of the last 7 days. Taller bar = higher availability; red bars mark days below the SLA target. Hover a bar for the exact %, coverage, and the device that drove any dip."/></h3><div className="ov-bars">{av.series.map((d:any,i:number)=><div key={i} className={'ov-bar'+(d.abnormal?' abnormal':'')} style={{height:barH(d.availability)+'%'}} title={`${d.day}: ${d.availability!=null?d.availability.toFixed(3)+'%':d.status}${d.cause?' — '+d.cause:''}`}/>)}</div><div className="ov-bars-axis"><span>-6d</span><span>Today</span></div></div>
+      <div className="ov-card"><h3>7-Day Availability<Help text="Fleet availability for each of the last 7 days. Taller bar = higher availability; red bars mark days below the SLA target. Hover a bar for the exact %, coverage, and the device that drove any dip."/></h3><div className="ov-bars">{av.series.map((d:any,i:number)=><div key={i} className={'ov-bar'+(d.abnormal?' abnormal':'')} style={{height:barH(d.availability)+'%'}} title={`${d.day}: ${d.availability!=null?fmtPct(d.availability):d.status}${d.cause?' — '+d.cause:''}`}/>)}</div><div className="ov-bars-axis"><span>-6d</span><span>Today</span></div></div>
       <div className="ov-card"><h3>Snapshot Utilisation<Help text="Point-in-time interface load (in + out) across all monitored up interfaces at the last poll, estimated as speed × utilisation. It is an instantaneous snapshot on the monitored fleet only — NOT a busy-hour, average, or WAN-egress figure. A peak/average WAN-egress throughput metric is planned."/></h3>{o.throughput.available?<div className="center"><div className="ov-ring-val">{o.throughput.value} {o.throughput.unit}</div><small style={{color:'var(--ov-dim)',fontFamily:'var(--ov-mono)',fontSize:11,marginTop:6}}>instant · in+out · monitored fleet</small></div>:<div className="ov-na"><AlertTriangle size={22} color="var(--ov-warn)"/><b>NOT MONITORED</b><small>{o.throughput.reason}</small></div>}</div>
     </div>
     <div className="ov-summary"><h2>Executive Summary<Help text="A plain-language, auto-generated narrative of fleet reliability: current availability vs target, devices lacking evidence, the lowest-performing site, and telemetry coverage. Deterministic — built from the live numbers, not written by hand."/></h2><p>{o.summary}</p></div>
@@ -377,11 +377,11 @@ function SlaPage({role}:{role:string}){
   useEffect(()=>{load();api('/trends').then(setTr).catch(()=>{})},[]);
   if(!data)return <section className="panel">Loading SLA…</section>;
   const r=data.resilience||{};
-  const fmt=(w:any)=>w&&w.availability!=null?w.availability.toFixed(3)+'%':(w?.status||'—');
+  const fmt=(w:any)=>w&&w.availability!=null?fmtPct(w.availability):(w?.status||'—');
   const backfill=async()=>{setBusy(true);setMsg('Starting backfill…');try{await api('/sla/backfill',{method:'POST'});const poll=async()=>{try{const st=await api('/sla/backfill/status');if(st.running){setMsg('Backfilling availability history from LogicMonitor… this runs in the background and can take a few minutes.');setTimeout(poll,8000)}else{if(st.error){setMsg('Backfill failed: '+st.error+'. Check server logs.')}else if(st.result){setMsg(`Backfill complete for ${st.result.devices} device(s) (${st.result.start} → ${st.result.end}).`);load()}else{setMsg('Backfill finished.');load()}setBusy(false)}}catch(x:any){setMsg('Lost status connection: '+x.message);setBusy(false)}};setTimeout(poll,2000)}catch(x:any){setMsg(x.message);setBusy(false)}};
   return <>
     <section className="cards">
-      <article><span>Fleet YTD availability<Help text="Fleet-wide year-to-date availability = up eligible minutes / observed eligible minutes across every mapped switch, coverage-gated at 90%. 'Insufficient' means not enough evidence yet — it is never shown as 0%."/></span><strong>{fmt(data.fleet_ytd)}</strong><small>Target {data.target}% · coverage {data.fleet_ytd.coverage.toFixed(1)}%</small></article>
+      <article><span>Fleet YTD availability<Help text="Fleet-wide year-to-date availability = up eligible minutes / observed eligible minutes across every mapped switch, coverage-gated at 90%. 'Insufficient' means not enough evidence yet — it is never shown as 0%."/></span><strong>{fmt(data.fleet_ytd)}</strong><small>Target {data.target}% · coverage {fmtPct(data.fleet_ytd.coverage)}</small></article>
       <article><span>Fleet WTD availability<Help text="Fleet availability week-to-date (Monday to now, in the configured timezone). Same formula as YTD but scoped to the current week."/></span><strong>{fmt(data.fleet_wtd)}</strong><small>Week to date · {data.timezone}</small></article>
       <article><span>Below target<Help text="Number of measured devices whose YTD availability is under the SLA target. 'Measured' excludes devices that lack sufficient coverage to judge."/></span><strong className={data.below_target?'danger':''}>{data.below_target}</strong><small>of {data.measured} measured of {data.monitored}</small></article>
       <article><span>Estimated tier<Help text="Fleet network-resilience tier mapped to Uptime Institute I–IV bands from observed redundancy (uplinks, stack, dual power) plus measured availability. A network estimate, not a facility certification; limited by the weakest critical node."/></span><strong>{r.fleet_tier||'Insufficient'}</strong><small>Network resilience</small></article>
@@ -397,14 +397,14 @@ function SlaPage({role}:{role:string}){
     </section>
     <section className="panel">
       <div className="panelhead"><div><h2>Per-device SLA<Help text="WTD and YTD availability for each switch with its YTD coverage and estimated tier. Coverage-gated: cells show 'Insufficient evidence' below 90% coverage rather than a misleading number."/></h2><p className="muted">Coverage-gated; missing evidence is never shown as zero. Backfill start {data.backfill_start}.</p></div></div>
-      <div className="table-scroll"><table><thead><tr>{['Device','Site','WTD','YTD','Coverage (YTD)','Est. tier'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{devPg.slice.map((d:any)=>{const dev=(r.devices||[]).find((x:any)=>x.device_id===d.device_id);return <tr key={d.device_id}><td><b>{d.hostname}</b></td><td>{d.site}</td><td>{fmt(d.wtd)}</td><td>{fmt(d.ytd)}</td><td>{d.ytd.coverage.toFixed(1)}%</td><td>{dev?.tier||'—'}</td></tr>})}{!data.devices.length&&<tr><td colSpan={6} className="muted">No mapped switches yet. Map switches in Settings, run collection, then backfill.</td></tr>}</tbody></table></div>
+      <div className="table-scroll"><table><thead><tr>{['Device','Site','WTD','YTD','Coverage (YTD)','Est. tier'].map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{devPg.slice.map((d:any)=>{const dev=(r.devices||[]).find((x:any)=>x.device_id===d.device_id);return <tr key={d.device_id}><td><b>{d.hostname}</b></td><td>{d.site}</td><td>{fmt(d.wtd)}</td><td>{fmt(d.ytd)}</td><td>{fmtPct(d.ytd.coverage)}</td><td>{dev?.tier||'—'}</td></tr>})}{!data.devices.length&&<tr><td colSpan={6} className="muted">No mapped switches yet. Map switches in Settings, run collection, then backfill.</td></tr>}</tbody></table></div>
       {data.devices.length>0&&<Pager {...devPg} label="devices"/>}
     </section>
     {tr&&<section className="panel">
       <div className="panelhead"><div><h2>Trend intelligence &amp; incidents<Help text="Week-over-week and month-over-month availability change (IMPROVING/WORSENING), plus incidents derived from contiguous below-100% coverage-gated days and approximate MTTR/MTBF. Exact incident timings require LogicMonitor alert history; these are availability-derived."/></h2><p className="muted">Availability-derived and coverage-gated. {tr.mttr_mtbf.basis}</p></div></div>
       <section className="cards">
-        <article><span>Week-over-week</span><strong>{tr.deltas.wow.delta!=null?(tr.deltas.wow.delta>=0?'+':'')+tr.deltas.wow.delta.toFixed(3)+'%':'—'}</strong><small>{tr.deltas.wow.trend}</small></article>
-        <article><span>Month-over-month</span><strong>{tr.deltas.mom.delta!=null?(tr.deltas.mom.delta>=0?'+':'')+tr.deltas.mom.delta.toFixed(3)+'%':'—'}</strong><small>{tr.deltas.mom.trend}</small></article>
+        <article><span>Week-over-week</span><strong>{fmtPctDelta(tr.deltas.wow.delta)}</strong><small>{tr.deltas.wow.trend}</small></article>
+        <article><span>Month-over-month</span><strong>{fmtPctDelta(tr.deltas.mom.delta)}</strong><small>{tr.deltas.mom.trend}</small></article>
         <article><span>Incidents ({tr.mttr_mtbf.window_days}d)</span><strong>{tr.mttr_mtbf.incidents}</strong><small>availability-derived</small></article>
         <article><span>MTTR</span><strong>{tr.mttr_mtbf.mttr_minutes!=null?tr.mttr_mtbf.mttr_minutes+' min':'—'}</strong><small>mean time to recover</small></article>
         <article><span>MTBF</span><strong>{tr.mttr_mtbf.mtbf_hours!=null?tr.mttr_mtbf.mtbf_hours+' h':'—'}</strong><small>mean time between failures</small></article>

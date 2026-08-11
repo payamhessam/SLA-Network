@@ -11,6 +11,7 @@ import React,{useEffect,useMemo,useState}from'react';
 import{Activity,AlertTriangle,CheckCircle2,Download,Filter,MonitorCog,RefreshCw,Server,ShieldCheck}from'lucide-react';
 import './fleet.css';
 import Help from './Help';
+import{fmtPct,fmtPctDelta}from'./format';
 
 type Props={token:string;open:(device:any)=>void};
 type Uptime={display:string;last_polled?:string|null;state:'valid'|'pending'|'failed'};
@@ -27,7 +28,7 @@ export default function InventoryFleet({token,open}:Props){
   const stats=useMemo(()=>{const valid=Object.values(uptimes).filter(x=>x.state==='valid').length;const failed=Object.values(uptimes).filter(x=>x.state==='failed').length;const gaps=data.items.filter((x:any)=>x.logicmonitor_match_status!=='Matched').length;return{valid,failed,gaps}},[data,uptimes]);
   const lastSync=useMemo(()=>{const values=Object.values(uptimes).map(x=>x.last_polled).filter(Boolean).sort();return values.length?new Date(values[values.length-1]!).toLocaleString():'Baseline pending'},[uptimes]);
   const slaByLm=useMemo(()=>{const m:Record<number,any>={};(slaSummary?.devices||[]).forEach((e:any)=>{if(e.lm_device_id!=null)m[e.lm_device_id]=e});return m},[slaSummary]);
-  const fmt=(w:any)=>w&&w.availability!=null?w.availability.toFixed(3)+'%':(w?.status||'Baseline pending');
+  const fmt=(w:any)=>w&&w.availability!=null?fmtPct(w.availability):(w?.status||'Baseline pending');
   const exportCsv=()=>{const rows=[['Hostname','Management IP','Site','City','Region','Current Uptime'],...data.items.map((d:any)=>[d.generated_name,d.management_ip||'',d.site_code,d.city,d.province_region||'',uptimes[d.id]?.display||'Collection pending'])];const csv=rows.map(r=>r.map((v:any)=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='Device_Fleet_Current_View.csv';a.click();URL.revokeObjectURL(a.href)};
   return <div className="sentinel-fleet">
     <div className="fleet-title"><div><span className="fleet-kicker"><ShieldCheck size={15}/> Reliability Sentinel</span><h2>Fleet &amp; SLA Compliance</h2><p>Real-time telemetry and compliance tracking.</p></div><button className="fleet-refresh" onClick={()=>load(data.page)} disabled={loading}><RefreshCw size={16}/>{loading?'Refreshing…':'Refresh Data'}</button></div>
@@ -40,7 +41,7 @@ export default function InventoryFleet({token,open}:Props){
       <article><span>Monitoring Gaps</span><strong>{stats.gaps}</strong></article>
       <article><span>Collection Errors</span><strong className={stats.failed?'danger':''}>{stats.failed}</strong></article>
     </div></section>
-    <section><div className="fleet-section-head"><h3 className="fleet-section-title">Compliance Trends<Help text="12-week fleet reliability trend. The blue line is weekly availability (left % axis); the orange bars are weekly downtime minutes (right axis); the dashed amber line is the SLA target. Downtime bars spike where the availability line dips. The coverage badge shows how complete the underlying evidence is."/></h3><span className="confidence"><i/> Coverage: {slaSummary?slaSummary.fleet_ytd.coverage.toFixed(1)+'%':'Baseline pending'}</span></div>
+    <section><div className="fleet-section-head"><h3 className="fleet-section-title">Compliance Trends<Help text="12-week fleet reliability trend. The blue line is weekly availability (left % axis); the orange bars are weekly downtime minutes (right axis); the dashed amber line is the SLA target. Downtime bars spike where the availability line dips. The coverage badge shows how complete the underlying evidence is."/></h3><span className="confidence"><i/> Coverage: {slaSummary?fmtPct(slaSummary.fleet_ytd.coverage):'Baseline pending'}</span></div>
       {trend&&trend.availability_trend.series.some((w:any)=>w.availability!=null)?(()=>{
         const s=trend.availability_trend.series,tgt=trend.availability_trend.target;const vals=s.map((w:any)=>w.availability).filter((x:any)=>x!=null);const wow=trend.deltas.wow,mom=trend.deltas.mom;const tc=(t:string)=>t==='WORSENING'?'#ffb4ab':t==='IMPROVING'?'#7fe0b6':'#c2c6d2';
         const W=840,H=210,padL=50,padR=48,padT=14,padB=26,pw=W-padL-padR,ph=H-padT-padB;const aLo=Math.max(0,Math.min(tgt,...(vals.length?vals:[tgt]))-0.1),aHi=100;const yA=(v:number)=>padT+ph-((v-aLo)/((aHi-aLo)||1))*ph;const dMax=Math.max(1,...s.map((w:any)=>w.downtime_minutes||0));const step=pw/s.length,bw=Math.min(step*0.6,24);const cx=(i:number)=>padL+step*i+step/2;const line=s.map((w:any,i:number)=>w.availability!=null?`${cx(i).toFixed(1)},${yA(w.availability).toFixed(1)}`:null).filter(Boolean).join(' ');
@@ -51,13 +52,13 @@ export default function InventoryFleet({token,open}:Props){
             <text x={W-padR+6} y={padT+ph} fontFamily="monospace" fontSize={10} fill="#f5a623">{dMax}m</text>
             {s.map((w:any,i:number)=>{const b=((w.downtime_minutes||0)/dMax)*ph;return <rect key={i} x={cx(i)-bw/2} y={padT+ph-b} width={bw} height={Math.max(0,b)} rx={2} fill="#f5a623" opacity={0.5}><title>{`Week of ${w.week_start}: downtime ${w.downtime_minutes||0} min`}</title></rect>})}
             <polyline points={line} fill="none" stroke="#3f7fd4" strokeWidth={2.4} strokeLinejoin="round" strokeLinecap="round"/>
-            {s.map((w:any,i:number)=>w.availability!=null?<circle key={i} cx={cx(i)} cy={yA(w.availability)} r={3.2} fill="#3f7fd4"><title>{`Week of ${w.week_start}: ${w.availability.toFixed(3)}% · coverage ${w.coverage.toFixed(0)}%`}</title></circle>:null)}
+            {s.map((w:any,i:number)=>w.availability!=null?<circle key={i} cx={cx(i)} cy={yA(w.availability)} r={3.2} fill="#3f7fd4"><title>{`Week of ${w.week_start}: ${fmtPct(w.availability)} · coverage ${fmtPct(w.coverage)}`}</title></circle>:null)}
             {s.map((w:any,i:number)=>(i%3===0||i===s.length-1)?<text key={i} x={cx(i)} y={H-7} textAnchor="middle" fontFamily="monospace" fontSize={9} fill="#8fa3b5">{w.week_start.slice(5)}</text>:null)}
           </svg>
           <div style={{display:'flex',gap:18,fontFamily:'monospace',fontSize:11,color:'#8fa3b5',margin:'2px 0 4px'}}><span><i style={{display:'inline-block',width:14,height:3,background:'#3f7fd4',verticalAlign:'middle',marginRight:5}}/>Availability</span><span><i style={{display:'inline-block',width:10,height:10,background:'#f5a623',opacity:.6,verticalAlign:'middle',marginRight:5}}/>Downtime (min)</span><span><i style={{display:'inline-block',width:14,height:0,borderTop:'1.5px dashed #e0873a',verticalAlign:'middle',marginRight:5}}/>Target</span></div>
           <div style={{display:'flex',gap:24,fontFamily:'monospace',fontSize:12,marginTop:6,color:'#c2c6d2'}}>
-            <span>Week-over-week: {wow.delta!=null?(wow.delta>=0?'+':'')+wow.delta.toFixed(3)+'%':'—'} <b style={{color:tc(wow.trend)}}>{wow.trend}</b></span>
-            <span>Month-over-month: {mom.delta!=null?(mom.delta>=0?'+':'')+mom.delta.toFixed(3)+'%':'—'} <b style={{color:tc(mom.trend)}}>{mom.trend}</b></span>
+            <span>Week-over-week: {fmtPctDelta(wow.delta)} <b style={{color:tc(wow.trend)}}>{wow.trend}</b></span>
+            <span>Month-over-month: {fmtPctDelta(mom.delta)} <b style={{color:tc(mom.trend)}}>{mom.trend}</b></span>
           </div></div>;
       })():<div className="trend-panel"><div><span>Availability vs Target</span><span>12W Trend</span></div><div className="trend-grid"><div className="trend-empty"><Activity size={22}/><b>Baseline pending</b><small>Historical availability collection is required before a governed SLA trend can be displayed.</small></div></div></div>}
     </section>
