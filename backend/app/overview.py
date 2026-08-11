@@ -17,13 +17,27 @@ from .db import Device, InventoryDevice, ResilienceAssessment, Site, SlaDaily, S
 from .inventory import physical_switch_count
 
 
+# Business-importance bands. These are the four values the inventory schema actually offers
+# (schemas.py: Literal["Low","Medium","High","Critical"], default "Medium"). They describe how
+# important a device is to the BUSINESS — they are NOT its live health. A device can be
+# "Medium" criticality and simultaneously CRITICAL on Core Infrastructure Health (a faulty but
+# non-essential switch), or "Critical" criticality and perfectly healthy.
+BANDS = ("Critical", "High", "Medium", "Low")
+BAND_WEIGHT = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+
+
 def _band(criticality: str) -> str:
-    c = (criticality or "").lower()
-    if c == "critical":
-        return "Critical"
-    if c == "high":
-        return "High"
-    return "Standard"
+    """Normalise the stored criticality to one of BANDS.
+
+    Previously anything that was not Critical/High was relabelled "Standard", which
+    mislabelled the two distinct real values Medium and Low as a single band that does not
+    exist in the schema — so the Overview chart reported "Standard 40" for a fleet whose
+    devices are all actually at the default "Medium"."""
+    c = (criticality or "").strip().lower()
+    for b in BANDS:
+        if c == b.lower():
+            return b
+    return "Medium"  # schema default when unset/unrecognised
 
 
 def _health(snap) -> str:
@@ -139,10 +153,10 @@ def _delta(days):
 
 
 def criticality(db: Session, fleet: list[dict]) -> dict:
-    bands = {"Critical": 0, "High": 0, "Standard": 0}
+    bands = {b: 0 for b in BANDS}
     degraded = unreachable = 0
     for d in fleet:
-        bands[d["band"]] += 1
+        bands[d["band"]] = bands.get(d["band"], 0) + 1
         s = d["status"]
         if s == "Warning":
             degraded += 1
@@ -209,11 +223,11 @@ def sla_uptime(seconds):
 
 
 def core_infrastructure(db: Session, fleet: list[dict], limit: int = 5) -> list[dict]:
-    weight = {"Critical": 3, "High": 2, "Standard": 1}
+    weight = BAND_WEIGHT
     ranked = []
     for d in fleet:
         sev, label, value, status = _device_problem(d)
-        score = sev * 10 + weight[d["band"]]
+        score = sev * 10 + weight.get(d["band"], 2)
         ranked.append({"device_id": d["device_id"], "hostname": d["hostname"], "city": d["city"],
                        "model": d["model"] or "—", "metric": label, "value": value, "status": status,
                        "band": d["band"], "_score": score, "_sev": sev})
@@ -247,7 +261,7 @@ def site_reliability(db: Session, fleet: list[dict]) -> list[dict]:
             "availability_ytd": avail["availability"], "availability_30d": avail30["availability"],
             "coverage": avail["coverage"], "device_health": worst,
             "critical_devices": incidents, "degraded_devices": degraded,
-            "criticality": max((m["band"] for m in members), key=lambda b: {"Critical": 3, "High": 2, "Standard": 1}[b]),
+            "criticality": max((m["band"] for m in members), key=lambda b: BAND_WEIGHT.get(b, 2)),
             "status": worst,
             "since": _since_label(avail, ref),
             "reason": _commission_reason(avail, ref),
@@ -422,7 +436,7 @@ def executive_actions(db: Session, fleet: list[dict], gsla: dict) -> list[dict]:
     business exposure (criticality x severity) surfaces first. Site-level clustering and a
     monitoring-coverage gap are included so leadership sees systemic issues, not just a
     list of individual devices."""
-    band_w = {"Critical": 3, "High": 2, "Standard": 1}
+    band_w = BAND_WEIGHT
     actions = []
     # -- per-device conditions --
     for d in fleet:

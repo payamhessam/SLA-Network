@@ -9,19 +9,28 @@ os.environ.setdefault("JWT_SECRET", "test-secret-long-enough")
 from app import overview
 
 
-def _dev(band="Standard", status="Healthy", match="Matched", snap=None):
+def _dev(band="Medium", status="Healthy", match="Matched", snap=None):
     return {"device_id": 1, "hostname": "CA05-Z01-DSW-01", "city": "Delta", "model": "C9300",
             "band": band, "status": status, "match_status": match, "snap": snap}
 
 
 def test_criticality_bands_and_counts():
+    # The inventory schema offers exactly four business-criticality values
+    # (Literal["Low","Medium","High","Critical"], default "Medium"). Each must keep its own
+    # identity: an earlier version collapsed Medium AND Low into an invented band called
+    # "Standard", so the Overview ring reported "Standard 40" for a fleet that was really
+    # sitting entirely on the untouched "Medium" default.
     assert overview._band("Critical") == "Critical"
     assert overview._band("High") == "High"
-    assert overview._band("Medium") == "Standard" and overview._band("Low") == "Standard"
-    fleet = [_dev("Critical", "Healthy"), _dev("High", "Warning"), _dev("Standard", "Critical"), _dev("Standard", "Unknown")]
+    assert overview._band("Medium") == "Medium"
+    assert overview._band("Low") == "Low"
+    assert overview._band("critical") == "Critical"          # case-insensitive
+    assert overview._band(None) == "Medium"                  # unset -> schema default
+    assert overview._band("Standard") == "Medium"            # unknown -> schema default
+    fleet = [_dev("Critical", "Healthy"), _dev("High", "Warning"), _dev("Medium", "Critical"), _dev("Low", "Unknown")]
     c = overview.criticality(None, fleet)
     assert c["total"] == 4
-    assert c["bands"] == {"Critical": 1, "High": 1, "Standard": 2}
+    assert c["bands"] == {"Critical": 1, "High": 1, "Medium": 1, "Low": 1}
     assert c["degraded"] == 1  # the Warning device
     assert c["unreachable"] == 2  # Critical + Unknown
 
