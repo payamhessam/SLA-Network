@@ -150,9 +150,10 @@ async def refresh_all_switches() -> dict:
 
 
 async def switch_refresh_loop() -> None:
+    """Refresh every switch at startup, then every interval. Runs first (not sleep-first) so a
+    container restart never leaves the fleet stale for up to a full interval."""
     interval_seconds = max(1, get_settings().switch_collection_interval_minutes) * 60
     while True:
-        await asyncio.sleep(interval_seconds)
         try:
             result = await refresh_all_switches()
             logger.info("Background switch refresh completed: %s", result)
@@ -160,3 +161,4 @@ async def switch_refresh_loop() -> None:
             raise
         except Exception as exc:
             logger.error("Background switch refresh run failed (%s)", type(exc).__name__)
+        await asyncio.sleep(interval_seconds)

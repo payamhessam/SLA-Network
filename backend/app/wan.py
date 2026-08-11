@@ -220,15 +220,17 @@ async def refresh_all() -> dict:
 
 
 async def wan_refresh_loop() -> None:
+    """Refresh WAN routers at startup, then every interval (run-first, not sleep-first, so a
+    container restart never leaves WAN circuit status stale for up to a full interval)."""
     interval = max(1, get_settings().switch_collection_interval_minutes) * 60
     while True:
-        await asyncio.sleep(interval)
         try:
             logger.info("Background WAN router refresh: %s", await refresh_all())
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.error("Background WAN router refresh run failed (%s)", type(exc).__name__)
+        await asyncio.sleep(interval)
 
 
 async def bootstrap_wan(actor: str = "bootstrap") -> dict:

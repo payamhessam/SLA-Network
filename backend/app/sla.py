@@ -366,9 +366,10 @@ async def needs_backfill() -> bool:
 
 
 async def sla_rollup_loop() -> None:
-    """Every 6h: recompute yesterday..today for every mapped switch."""
+    """Recompute yesterday..today for every mapped switch at startup, then every 6h.
+    Runs first (not sleep-first) so a container restart never leaves sla_daily stale for
+    up to a full interval — today's row must stay current for the Overview trend chart."""
     while True:
-        await asyncio.sleep(6 * 3600)
         try:
             result = await refresh_recent(1)
             logger.info("SLA rollup completed for %s devices", result["devices"])
@@ -376,3 +377,4 @@ async def sla_rollup_loop() -> None:
             raise
         except Exception as exc:
             logger.error("SLA rollup failed (%s)", type(exc).__name__)
+        await asyncio.sleep(6 * 3600)
