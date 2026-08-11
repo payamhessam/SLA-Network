@@ -1,15 +1,15 @@
-fastapi==0.116.1
+fastapi==0.141.1
 uvicorn[standard]==0.35.0
 sqlalchemy==2.0.42
 psycopg[binary]==3.2.9
 pydantic-settings==2.10.1
 httpx==0.28.1
-PyJWT==2.10.1
+PyJWT==2.13.0
 argon2-cffi==25.1.0
-python-multipart==0.0.20
+python-multipart==0.0.31
 slowapi==0.1.9
 openpyxl==3.1.5
-pytest==8.4.1
+pytest==9.0.3
 
 python-pptx==1.0.2
 ntc-templates==7.9.0
