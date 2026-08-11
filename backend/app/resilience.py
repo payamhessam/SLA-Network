@@ -75,7 +75,7 @@ def tier_of(signals: dict, availability_ytd: float | None) -> tuple[str, list[st
     reasons.append(f"{stack} stack member(s)" + ("" if signals["stack_known"] else " (unconfirmed)"))
     reasons.append(f"{signals['power_supplies']} healthy power supply(ies)")
     if availability_ytd is not None:
-        reasons.append(f"measured YTD availability {availability_ytd:.3f}%")
+        reasons.append(f"measured YTD availability {sla.fmt_pct(availability_ytd)}")
     if two_paths and stack >= 2 and dual_power and availability_ytd is not None and availability_ytd >= 99.995:
         tier = "Tier IV"
         reasons.append("Dual paths + redundant supervisors + dual power + measured fault tolerance -> fault tolerant")

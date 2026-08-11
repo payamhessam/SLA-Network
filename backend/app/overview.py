@@ -479,7 +479,7 @@ def executive_actions(db: Session, fleet: list[dict], gsla: dict) -> list[dict]:
     # -- fleet SLA below target --
     if gsla["current"] is not None and gsla["current"] < gsla["target"]:
         actions.append({"severity": "P2", "title": "Fleet SLA below target",
-                        "detail": f"30-day network availability is {gsla['current']:.3f}% against a {gsla['target']}% target. "
+                        "detail": f"30-day network availability is {sla.fmt_pct(gsla['current'])} against a {gsla['target']}% target. "
                                   f"Recommended: start with the lowest-availability sites in the table below and address their recurring downtime.",
                         "device_id": None, "_rank": 45})
     actions.sort(key=lambda a: -a["_rank"])
@@ -502,13 +502,13 @@ def executive_summary(db: Session, fleet: list[dict], gsla: dict, crit: dict, si
                 f"90% evidence threshold, so a governed network SLA cannot yet be published. Continue collection to establish the baseline.")
     verb = "remained above target" if gsla["current"] >= gsla["target"] else "fell below target"
     worst = min((s for s in sites if s["availability_ytd"] is not None), key=lambda s: s["availability_ytd"], default=None)
-    parts = [f"Canada network availability {verb} at {gsla['current']:.3f}% over the trailing 30 days against a {gsla['target']}% objective."]
+    parts = [f"Canada network availability {verb} at {sla.fmt_pct(gsla['current'])} over the trailing 30 days against a {gsla['target']}% objective."]
     if crit["unreachable"]:
         parts.append(f"{crit['unreachable']} of {total} devices currently lack confirmed reachability evidence and are excluded from healthy counts.")
     else:
         parts.append("All monitored devices are currently reporting.")
     if worst and worst["availability_ytd"] is not None and worst["availability_ytd"] < gsla["target"]:
-        parts.append(f"The lowest-performing site is {worst['city']} at {worst['availability_ytd']:.3f}% YTD.")
+        parts.append(f"The lowest-performing site is {worst['city']} at {sla.fmt_pct(worst['availability_ytd'])} YTD.")
     parts.append(f"Fleet telemetry coverage was {header_data['sla_evidence_coverage']}%.")
     return " ".join(parts)
 

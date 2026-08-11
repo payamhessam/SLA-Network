@@ -58,12 +58,9 @@ def _safe(v):
 
 
 def _pct(v):
-    """Same meaningful-precision rule as the UI's shared fmtPct (frontend/src/format.ts):
-    round to 2 decimals, trim trailing zeros. Excel/PPTX must match the app, not diverge."""
-    if not isinstance(v, (int, float)):
-        return "Insufficient"
-    s = f"{v:.2f}".rstrip("0").rstrip(".")
-    return (s or "0") + "%"
+    """Delegates to the single canonical Python formatter (sla.fmt_pct), which mirrors the
+    UI's frontend/src/format.ts. Kept as a thin alias so report code reads naturally."""
+    return sla.fmt_pct(v)
 
 
 def _status_hex(text: str) -> str:

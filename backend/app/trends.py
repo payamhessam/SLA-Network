@@ -130,9 +130,17 @@ def mttr_mtbf(db: Session, days: int = 90, inc=None, fleet=None) -> dict:
 def build(db: Session) -> dict:
     fleet = overview._fleet(db)  # compute the fleet once and thread it through
     inc = incidents(db, fleet=fleet)
+    shown = inc[:25]
     return {
         "availability_trend": availability_trend(db, fleet=fleet),
         "deltas": deltas(db, fleet=fleet),
-        "incidents": inc[:25],
+        # `incidents` is the most-recent slice for display only. The count is stated
+        # explicitly so a consumer can never mistake len(incidents) for the real total —
+        # the authoritative count (used by the Excel/PPTX "Incidents (90 days)" KPI) is
+        # mttr_mtbf.incidents.
+        "incidents": shown,
+        "incidents_shown": len(shown),
+        "incidents_total": len(inc),
+        "incidents_truncated": len(inc) > len(shown),
         "mttr_mtbf": mttr_mtbf(db, inc=inc, fleet=fleet),
     }

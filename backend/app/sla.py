@@ -30,6 +30,20 @@ DEVICE_CONCURRENCY = 6  # cap on devices processed at once (each holds one DB se
 _backfill_lock = asyncio.Lock()
 
 
+def fmt_pct(v, missing: str = "Insufficient") -> str:
+    """Canonical percentage presentation for ALL Python-side consumers (Excel, PowerPoint,
+    narrative summaries). Mirrors the UI's frontend/src/format.ts fmtPct exactly: round to 2
+    decimals, trim trailing zeros — 100.0 -> "100%", 99.9754 -> "99.98%", 99.9 -> "99.9%".
+    Calculations keep full precision; this is presentation-only. Anything that formats a
+    percentage itself instead of calling this WILL drift from the app (that is exactly how
+    the reports and the executive narrative ended up showing 3 decimals while the UI showed 2).
+    """
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return missing
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
+    return (s or "0") + "%"
+
+
 def tz() -> ZoneInfo:
     try:
         return ZoneInfo(get_settings().sla_timezone)
