@@ -27,6 +27,7 @@ LOSS_DATAPOINT = "PingLossPercent"
 COVERAGE_MIN_SAMPLES = 2
 CONCURRENCY = 16  # global cap on in-flight LM requests during a backfill
 DEVICE_CONCURRENCY = 6  # cap on devices processed at once (each holds one DB session)
+RETRY_WINDOW_DAYS = 35  # only re-query a stored below-threshold day if it's this recent
 _backfill_lock = asyncio.Lock()
 
 
@@ -180,7 +181,16 @@ async def backfill_device(device: Device, start: date, end: date, force: bool = 
     with SessionLocal() as db:
         existing = {r.day: r for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id == device.id, SlaDaily.day >= start, SlaDaily.day <= end)).all()}
         days = [start + timedelta(n) for n in range((end - start).days + 1)]
-        pending = [d for d in days if force or not (existing.get(d) and existing[d].coverage >= threshold)]
+        retry_cutoff = today_local() - timedelta(days=RETRY_WINDOW_DAYS)
+        # A stored row only ever gets written when LogicMonitor returned real evidence for
+        # that day (see the has_data skip below) — so an existing row's coverage, even if
+        # below threshold, is a confirmed final answer, not a fetch failure. Retrying it
+        # forever wastes LM calls on days that will never improve (e.g. a device onboarded
+        # after Jan 1 will show 0% coverage for January every time, permanently). Only
+        # re-query below-threshold days that are recent enough for a genuine partial-outage
+        # gap to still be worth catching up on; older confirmed-low days are left alone.
+        pending = [d for d in days if force or not existing.get(d)
+                   or (existing[d].coverage < threshold and d >= retry_cutoff)]
         pending.sort(reverse=True)  # recent-first so WTD/MTD windows become valid quickly
         skipped_no_evidence = 0
         for i in range(0, len(pending), 12):  # commit every ~12 days so progress is visible incrementally
