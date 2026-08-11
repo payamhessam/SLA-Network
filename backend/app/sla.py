@@ -168,7 +168,13 @@ async def backfill_device(device: Device, start: date, end: date, force: bool = 
         expected = round((e0 - s0) / 60)
         availability = (100.0 * up_minutes / observed) if observed else None
         coverage = min(100.0, (100.0 * observed / expected)) if expected else 0.0
-        return day, {"expected_minutes": expected, "observed_minutes": observed, "up_minutes": up_minutes, "availability": availability, "coverage": coverage}
+        # has_data = at least one window returned a usable LogicMonitor response. When every
+        # window failed (outage, rate-limit storm, auth error) this is False, and "0 observed
+        # minutes" means "we do not know", NOT "the device was unmonitored". The caller must
+        # not persist that as evidence — see the write loop below.
+        has_data = any(p[2] for p in parts)
+        return day, {"expected_minutes": expected, "observed_minutes": observed, "up_minutes": up_minutes,
+                     "availability": availability, "coverage": coverage}, has_data
 
     written = 0
     with SessionLocal() as db:
@@ -176,12 +182,26 @@ async def backfill_device(device: Device, start: date, end: date, force: bool = 
         days = [start + timedelta(n) for n in range((end - start).days + 1)]
         pending = [d for d in days if force or not (existing.get(d) and existing[d].coverage >= threshold)]
         pending.sort(reverse=True)  # recent-first so WTD/MTD windows become valid quickly
+        skipped_no_evidence = 0
         for i in range(0, len(pending), 12):  # commit every ~12 days so progress is visible incrementally
-            for day, metrics in await asyncio.gather(*(day_metrics(d) for d in pending[i:i + 12])):
+            for day, metrics, has_data in await asyncio.gather(*(day_metrics(d) for d in pending[i:i + 12])):
+                if not has_data:
+                    # LogicMonitor returned nothing usable for this day. Persisting the
+                    # resulting zeros would (a) fabricate "0 observed minutes" as if it were
+                    # measured evidence and (b) with force=True — which the scheduled 6-hourly
+                    # rollup uses — OVERWRITE a previously good day, destroying real measured
+                    # history. Leave whatever is already stored untouched; a genuinely
+                    # never-monitored day simply has no row, which reads as "no evidence".
+                    skipped_no_evidence += 1
+                    continue
                 _upsert(db, device.id, day, metrics, settings.availability_source)
                 written += 1
             db.commit()
-    return {"device": device.hostname, "status": "ok", "written": written, "days": len(days)}
+    if skipped_no_evidence:
+        logger.warning("SLA backfill for %s: %s day(s) skipped — LogicMonitor returned no usable data "
+                       "(existing stored evidence preserved)", device.hostname, skipped_no_evidence)
+    return {"device": device.hostname, "status": "ok", "written": written, "days": len(days),
+            "skipped_no_evidence": skipped_no_evidence}
 
 
 def monitored_devices(db: Session):
