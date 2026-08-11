@@ -24,7 +24,8 @@ function PathResilience({administrator}:{administrator:boolean}){
   const load=()=>api('/path-resilience').then(setData).catch((x:any)=>setErr(x.message));
   useEffect(()=>{load()},[]);
   useEffect(()=>{api('/throughput/window?hours=168').then(setTp).catch(()=>{})},[]);
-  const openSsh=async(b:any)=>{setSsh({site:b.site_code,device_id:b.dsw_device_id,transcript:'',busy:false,msg:'',plan:null});try{const plan=await api(`/devices/${b.dsw_device_id}/collect-plan`);setSsh((s:any)=>s?{...s,plan}:s)}catch(x:any){setSsh((s:any)=>s?{...s,msg:x.message}:s)}};
+  const openSsh=async(b:any)=>{setSsh({site:b.site_code,device_id:b.dsw_device_id,transcript:'',pw:'',busy:false,msg:'',plan:null});try{const plan=await api(`/devices/${b.dsw_device_id}/collect-plan`);setSsh((s:any)=>s?{...s,plan}:s)}catch(x:any){setSsh((s:any)=>s?{...s,msg:x.message}:s)}};
+  const submitConnect=async()=>{setSsh((s:any)=>({...s,busy:true,msg:'Approve the sign-in on your Microsoft Authenticator — this can take up to ~2 minutes.'}));try{const r=await api(`/devices/${ssh.device_id}/ssh-collect`,{method:'POST',body:JSON.stringify({password:ssh.pw})});if(r.status==='ok'){setSsh(null);await load()}else{setSsh((s:any)=>({...s,busy:false,msg:r.message||'SSH failed.'}))}}catch(x:any){setSsh((s:any)=>({...s,busy:false,msg:x.message||'SSH failed.'}))}};
   const submitSsh=async()=>{setSsh((s:any)=>({...s,busy:true,msg:''}));try{const r=await api(`/devices/${ssh.device_id}/manual-collect`,{method:'POST',body:JSON.stringify({transcript:ssh.transcript})});if(r.status==='ok'){setSsh(null);await load()}else{setSsh((s:any)=>({...s,busy:false,msg:r.message||'Could not parse the pasted output.'}))}}catch(x:any){setSsh((s:any)=>({...s,busy:false,msg:x.message}))}};
   if(err)return <div className="banner">{err}</div>;
   if(!data)return <div className="pr"><div className="pr-loading">Loading path resilience…</div></div>;
@@ -96,11 +97,19 @@ function PathResilience({administrator}:{administrator:boolean}){
       </div>})}
     {ssh&&<div className="pr-modal" onClick={()=>!ssh.busy&&setSsh(null)}><div className="pr-modal-box" onClick={e=>e.stopPropagation()}>
       <div className="pr-modal-h"><b>Pull data from {ssh.site} DSW over SSH</b><button onClick={()=>!ssh.busy&&setSsh(null)}>✕</button></div>
-      <p className="pr-why">Run these read-only commands in your own MFA-authenticated SSH session to the branch DSW, then paste the full transcript below.</p>
-      {ssh.plan?<pre className="pr-pre">{ssh.plan.script}</pre>:<div className="pr-loading">Loading commands…</div>}
-      <textarea className="pr-ta" placeholder="Paste the SSH transcript here…" value={ssh.transcript} onChange={e=>setSsh((s:any)=>({...s,transcript:e.target.value}))}/>
-      {ssh.msg&&<div className="pr-err">{ssh.msg}</div>}
-      <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:10}}><button onClick={()=>setSsh(null)} disabled={ssh.busy}>Cancel</button><button className="primary" onClick={submitSsh} disabled={ssh.busy||!ssh.transcript.trim()}>{ssh.busy?'Parsing…':'Ingest transcript'}</button></div>
+      <p className="pr-why">Runs read-only Cisco <code>show</code> commands on <b>{ssh.plan?.management_ip||'the branch DSW'}</b> as <b>pa-phessamfar</b> — no configuration change is made. The password is used for one session and never stored.</p>
+      <label className="dv-modal-label">Connect now — you'll approve the sign-in on Microsoft Authenticator</label>
+      <div style={{display:'flex',gap:8}}>
+        <input type="password" className="dv-modal-input" style={{flex:1}} value={ssh.pw} disabled={ssh.busy} autoFocus onChange={e=>setSsh((s:any)=>({...s,pw:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&ssh.pw&&!ssh.busy&&submitConnect()} placeholder="SSH password"/>
+        <button className="primary" style={{whiteSpace:'nowrap'}} onClick={submitConnect} disabled={ssh.busy||!ssh.pw||!ssh.plan?.management_ip}>{ssh.busy?'Waiting for approval…':'Connect & collect'}</button>
+      </div>
+      {ssh.msg&&<div className="pr-err" style={{display:'flex',alignItems:'center',gap:8}}>{ssh.busy&&<RefreshCw size={14} className="dv-spin"/>}{ssh.msg}</div>}
+      <details style={{marginTop:16}}><summary style={{cursor:'pointer',fontSize:13}}>Or paste output manually (if the app can't reach the device)</summary>
+        {ssh.plan?<pre className="pr-pre" style={{marginTop:12}}>{ssh.plan.script}</pre>:<div className="pr-loading">Loading commands…</div>}
+        <textarea className="pr-ta" placeholder="Paste the SSH transcript here…" value={ssh.transcript} onChange={e=>setSsh((s:any)=>({...s,transcript:e.target.value}))}/>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:8}}><button className="primary" onClick={submitSsh} disabled={ssh.busy||!ssh.transcript.trim()}>{ssh.busy?'Parsing…':'Ingest transcript'}</button></div>
+      </details>
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}><button onClick={()=>setSsh(null)} disabled={ssh.busy}>Close</button></div>
     </div></div>}
   </div>;
 }
