@@ -1,6 +1,7 @@
 """Provider & Path Resilience — per-branch availability, failover posture, and best routes.
 
-Admin-only. Combines three already-collected sources per branch (site):
+Readable by any authenticated user; SSH collection and the remediation CLI are
+administrator-only. Combines three already-collected sources per branch (site):
   * SLA daily rollup  -> availability windows (rolling-7 / WTD / previous-week / YTD),
     reported both pooled (per-device) and best-path (redundancy-aware proxy: the branch
     kept a path if its best-covered device was up).
@@ -172,8 +173,11 @@ def _wan_circuits(all_routers: list[WanRouter], dsw_mgmt_ip: str | None, default
     return out
 
 
-def build(db: Session, site_code: str | None = None) -> dict:
-    """One payload: every branch (or a single site_code) with availability + failover + routes."""
+def build(db: Session, site_code: str | None = None, include_commands: bool = True) -> dict:
+    """One payload: every branch (or a single site_code) with availability + failover + routes.
+
+    `include_commands` is False for non-administrators: the remediation findings are still
+    returned (leadership needs the risk), but the device CLI is stripped server-side."""
     q = (
         select(InventoryDevice, InventoryDeviceType.type_code, Site.site_code, Site.city, Site.province_region)
         .join(InventoryDeviceType, InventoryDeviceType.id == InventoryDevice.device_type_id)
@@ -211,12 +215,15 @@ def build(db: Session, site_code: str | None = None) -> dict:
         # Canonical physical-chassis count (same function Device Fleet's "Total Network
         # Devices" and Overview's Site Reliability table use) so this branch's device count
         # agrees with those pages instead of a locally-invented estimate.
-        physical, _src = resilience.physical_switch_count(snap.details) if snap else (None, None)
-        physical = physical or 1
+        counted, _src = resilience.physical_switch_count(snap.details) if snap else (None, None)
+        physical = counted or 1
         dev = {
             "name": inv.generated_name, "type": type_code, "role": inv.role,
             "management_ip": inv.management_ip, "legacy_id": legacy.id,
-            "status": snap.status if snap else "Unknown", "model": inv.model, "physical": physical,
+            "status": snap.status if snap else "Unknown", "model": inv.model,
+            "physical": physical,                      # chassis in this logical unit
+            "is_stack": bool(counted and counted > 1),  # a stack reports to LM as ONE device
+            "stack_confirmed": counted is not None,     # False = stack size not yet evidenced
         }
         b["devices"].append(dev)
         b["_ids"].append(legacy.id)
@@ -266,19 +273,28 @@ def build(db: Session, site_code: str | None = None) -> dict:
             provs = ", ".join(f"{c['provider']}{' (primary)' if c['is_primary'] else ''}" for c in wan)
             sev = "ok" if len(wan) >= 2 else "warning"
             failover.setdefault("findings", []).append({"severity": sev, "text": f"WAN circuits mapped: {provs}."})
-        # Device count = sum of physical chassis (stack members counted individually), the
-        # SAME canonical figure as Device Fleet's "Total Network Devices" and Overview's Site
-        # Reliability table (backend.app.inventory.physical_switch_count). Using any other
-        # method here would make this page disagree with those two for no legitimate reason.
+        # Device counting, stated unambiguously because a switch stack is several physical
+        # switches that LogicMonitor (correctly) monitors as ONE logical device:
+        #   physical_switches = chassis, the SAME canonical figure as Device Fleet's "Total
+        #                       Network Devices" and Overview's Site Reliability "Devices"
+        #                       (backend.app.inventory.physical_switch_count)
+        #   monitored_units   = logical devices polled by LogicMonitor
+        # Every unit reaching this point is mapped AND collected, so all of them are monitored;
+        # a smaller monitored_units than physical_switches means "stacked", never "unmonitored".
         monitored = len(b["_ids"])
         device_total = sum(d["physical"] for d in b["devices"])
+        stacks = sum(1 for d in b["devices"] if d["is_stack"])
+        unconfirmed = sum(1 for d in b["devices"] if not d["stack_confirmed"])
         out.append({
             "site_code": sc, "city": b["city"], "region": b["region"],
             "device_count": device_total, "monitored_count": monitored, "devices": b["devices"],
+            "physical_switches": device_total, "monitored_units": monitored,
+            "stack_count": stacks, "standalone_count": monitored - stacks,
+            "stack_size_unconfirmed": unconfirmed, "all_monitored": True,
             "dsw_device_id": b["_dsw"],  # legacy device id for the admin SSH-pull button
             "windows": windows, "failover": failover, "posture": posture,
             "ssh_collected_at": ssh.get("collected_at"),
             "wan_circuits": wan,
-            "kb": kb.for_branch(failover, tables),  # CCIE recommendations + verify/config commands
+            "kb": kb.for_branch(failover, tables, include_commands),  # findings; CLI for admins only
         })
     return {"branches": out, "as_of": sla.today_local().isoformat()}

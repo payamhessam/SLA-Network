@@ -189,8 +189,11 @@ def physical_switch_count(details):
 
 
 def switch_evidence(db, d):
-    if d.device_type.type_code not in {"DSW", "ASW"}:
-        return None, "Not applicable"
+    # No device-type allowlist: rely on the collected chassis evidence itself. An allowlist of
+    # {DSW, ASW} silently under-counted real hardware — CA08-Z01-DAS-01 is a genuine 2-chassis
+    # C9300 stack (two chassis serials + Switch 1/Switch 2 PSUs) that was being counted as 1,
+    # which also made Device Fleet/Overview disagree with Path Resilience. Non-stacking types
+    # (routers) simply have no chassis evidence and already fall back to 1.
     legacy = db.scalar(select(Device).where(Device.lm_device_id == d.logicmonitor_device_id)) if d.logicmonitor_device_id else None
     snapshot = db.scalar(select(Snapshot).where(Snapshot.device_id == legacy.id).order_by(Snapshot.collected_at.desc()).limit(1)) if legacy else None
     return physical_switch_count(snapshot.details if snapshot else None)

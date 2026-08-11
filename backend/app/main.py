@@ -121,9 +121,11 @@ def health(db: Session = Depends(session)):
 @app.get("/api/v1/path-resilience")
 def path_resilience(site: str | None = None, user=Depends(current_user), db: Session = Depends(session)):
     """Per-branch provider & path resilience (availability windows, failover posture, priority
-    routes). Read-only for all authenticated users; SSH collection remains admin-only.
-    Optional ?site=CA15 to focus one branch."""
-    return pathres.build(db, site_code=site)
+    routes). Read-only for all authenticated users; SSH collection remains admin-only, and the
+    remediation CLI is returned to administrators only (viewers still get the finding and the
+    plain-English recommendation). Optional ?site=CA15 to focus one branch."""
+    is_admin = user.get("role") == "Administrator"
+    return pathres.build(db, site_code=site, include_commands=is_admin)
 
 
 @app.get("/api/v1/throughput/window")

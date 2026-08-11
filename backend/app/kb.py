@@ -121,8 +121,16 @@ KB: dict[str, dict] = {
 }
 
 
-def for_branch(failover: dict, tables: dict) -> list[dict]:
-    """Return the KB entries that apply to this branch, based on its collected posture."""
+def for_branch(failover: dict, tables: dict, include_commands: bool = True) -> list[dict]:
+    """Return the KB entries that apply to this branch, based on its collected posture.
+
+    `include_commands=False` strips the device CLI (and its reference) from every entry,
+    leaving the plain-English title/why/recommendation. Read-only viewers get the business
+    finding — "this branch has no automatic failover and here is what should change" —
+    while the copy-ready configuration commands stay with administrators, who are the only
+    role that can act on them. Enforced here in the API rather than hidden in the UI, so
+    the commands are genuinely absent from a non-admin response.
+    """
     out: list[dict] = []
     wan = failover.get("wan_circuits", 0)
     single_l3 = (failover.get("has_routing_evidence") and failover.get("northbound_paths", 0) <= 1
@@ -142,4 +150,8 @@ def for_branch(failover: dict, tables: dict) -> list[dict]:
     neighbors = tables.get("CDP-LLDP Neighbors", []) or []
     if neighbors and not any(str(r.get("Protocol")) == "LLDP" for r in neighbors):
         out.append(KB["lldp_disabled"])
+    if not include_commands:
+        # Strip the CLI for non-administrators. Copy (don't mutate) so the module-level KB
+        # dict is never modified for subsequent admin requests.
+        out = [{k: v for k, v in entry.items() if k not in ("commands", "reference")} for entry in out]
     return out

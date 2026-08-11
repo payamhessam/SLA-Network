@@ -58,13 +58,11 @@ def _fleet(db: Session) -> list[dict]:
         site = sites.get(inv.site_id)
         criticality = inv.criticality or "Medium"
         # Physical chassis count: a switch stack is several physical switches behind one
-        # logical device. For DSW/ASW use the collected stack/chassis evidence (falling
-        # back to 1 when unconfirmed); routers/other single-chassis types count as 1.
-        type_code = inv.device_type.type_code if inv.device_type else None
-        if type_code in {"DSW", "ASW"} and snap:
-            physical = physical_switch_count(snap.details)[0] or 1
-        else:
-            physical = 1
+        # logical device. Counted from the collected chassis evidence for ANY device type
+        # (see inventory.switch_evidence) — an allowlist of {DSW, ASW} under-counted real
+        # hardware, e.g. CA08-Z01-DAS-01 is a genuine 2-chassis C9300 stack. Types that do
+        # not stack have no chassis evidence and fall back to 1.
+        physical = (physical_switch_count(snap.details)[0] or 1) if snap else 1
         fleet.append({
             "device_id": dev.id if dev else None, "hostname": inv.generated_name, "lm_device_id": inv.logicmonitor_device_id,
             "match_status": (dev.match_status if dev else inv.logicmonitor_match_status), "monitored": dev is not None, "model": inv.model,

@@ -29,6 +29,15 @@ function PathResilience({administrator}:{administrator:boolean}){
   if(err)return <div className="banner">{err}</div>;
   if(!data)return <div className="pr"><div className="pr-loading">Loading path resilience…</div></div>;
   const pct=fmtPct;
+  // A switch stack is several physical switches that LogicMonitor monitors as ONE logical
+  // device. Saying "28 devices (10 monitored)" reads as if 18 were unmonitored — they are
+  // not. State chassis, units and stacks explicitly instead.
+  const deviceLine=(b:any)=>{
+    const p=b.physical_switches??b.device_count, u=b.monitored_units??b.monitored_count, st=b.stack_count??0;
+    const sw=`${p} switch${p===1?'':'es'}`;
+    if(u==null||p===u) return `${sw} · all monitored`;
+    return `${sw} in ${u} monitored unit${u===1?'':'s'}${st?` (${st} stacked)`:''} · all monitored`;
+  };
   const B=data.branches;
   const fully=B.filter((b:any)=>b.posture.indexOf('Fully')===0).length;
   const singleL3=B.filter((b:any)=>b.failover.has_routing_evidence&&b.failover.northbound_paths<=1).length;
@@ -54,7 +63,7 @@ function PathResilience({administrator}:{administrator:boolean}){
       const postureCls=b.posture.indexOf('Fully')===0?'ok':(b.posture.indexOf('Run')===0?'neutral':'warn');
       return <div className="pr-branch" key={b.site_code}>
         <div className="pr-branch-h">
-          <div><span className="pr-site">{b.site_code}</span><span className="pr-city">{b.city} · {b.device_count} device{b.device_count===1?'':'s'}{b.monitored_count!=null&&b.monitored_count!==b.device_count?` (${b.monitored_count} monitored)`:''}</span></div>
+          <div><span className="pr-site">{b.site_code}</span><span className="pr-city">{b.city} · {deviceLine(b)}<Help text={`${b.physical_switches} physical switch(es) at this branch, monitored as ${b.monitored_units} unit(s) because a stack of switches reports to LogicMonitor as ONE device — that is normal and correct, not a monitoring gap. ${b.stack_count} unit(s) are stacks, ${b.standalone_count} standalone. Every unit here is mapped and actively collected: nothing at this branch is unmonitored.`}/></span></div>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
             {administrator&&b.dsw_device_id&&<button className="pr-sshbtn" onClick={()=>openSsh(b)}><Terminal size={13}/> Pull via SSH</button>}
             {chip(postureCls,b.posture)}
@@ -81,8 +90,8 @@ function PathResilience({administrator}:{administrator:boolean}){
               <tbody>{f.priority_routes.map((r:any,i:number)=><tr key={i}><td>{['①','②','③'][i]||r.priority}</td><td>{r.prefix}</td><td>{r.next_hop}</td><td>{r.protocol}</td><td>{r.ad_metric}</td></tr>)}</tbody></table></div>
             :<div className="pr-need">Priority routes &amp; HSRP populate once the branch DSW is collected over SSH{administrator?' — use "Pull via SSH" above':''} (LogicMonitor has no routing table).</div>}
           {f.findings&&f.findings.length>0&&<ul className="pr-findings">{f.findings.map((fn:any,i:number)=><li key={i} className={fn.severity==='warning'?'warn':'ok'}>{fn.text}</li>)}</ul>}
-          {b.kb&&b.kb.length>0&&<div className="pr-kb"><div className="pr-kb-h">Recommended remediation · CCIE KB</div>{b.kb.map((k:any)=>
-            <details className="pr-kb-item" key={k.id}><summary>🛠 {k.title}</summary><div className="pr-why">{k.why}</div><div className="pr-rec"><b>Recommended:</b> {k.recommendation}</div><pre className="pr-pre">{k.commands.join('\n')}</pre><div className="pr-ref">Ref: {k.reference}</div></details>)}</div>}
+          {b.kb&&b.kb.length>0&&<div className="pr-kb"><div className="pr-kb-h">{administrator?'Recommended remediation · CCIE KB':'Recommended actions'}<Help text={administrator?'Each risk found at this branch, why it matters, the recommended fix, and copy-ready read-only commands to verify it. The app never runs these — an engineer reviews and applies them.':'Each risk found at this branch, why it matters in plain English, and what should change. The device configuration commands are shown to administrators only.'}/></div>{b.kb.map((k:any)=>
+            <details className="pr-kb-item" key={k.id}><summary>🛠 {k.title}</summary><div className="pr-why">{k.why}</div><div className="pr-rec"><b>Recommended:</b> {k.recommendation}</div>{k.commands&&<pre className="pr-pre">{k.commands.join('\n')}</pre>}{k.reference&&<div className="pr-ref">Ref: {k.reference}</div>}</details>)}</div>}
         </div>
       </div>})}
     {ssh&&<div className="pr-modal" onClick={()=>!ssh.busy&&setSsh(null)}><div className="pr-modal-box" onClick={e=>e.stopPropagation()}>
@@ -161,7 +170,7 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
     {o.business_units?.length?<div className="ov-panel"><div className="ov-panel-head"><h2><Activity size={15}/> Business Unit Reliability<Help text="The fleet rolled up by business unit (e.g. Healthcare vs Dental): YTD and 30-day availability across that unit's devices, physical device count, sites, and open incidents. YTD is measured from each site's commissioning date, so a mid-year project shows a real number with a 'since' note rather than 'Insufficient'."/></h2><span className="tag">{o.business_units.length} units</span></div>
       <div className="ov-bu">{o.business_units.map((b:any,i:number)=><div key={i} className="ov-bu-card"><div className="ov-bu-top"><h3>{b.business_unit}</h3><span className={'ov-badge '+badge(b.status)}>{b.status}</span></div><div className="ov-bu-avail">{b.availability_ytd!=null?<b>{pct3(b.availability_ytd)}</b>:<b className="muted">Insufficient</b>}<small>YTD availability{b.since?` · since ${b.since}`:''}</small></div><div className="ov-bu-stats"><div><span>30-Day</span><b>{b.availability_30d!=null?pct3(b.availability_30d):'—'}</b></div><div><span>Devices</span><b>{b.devices}</b></div><div><span>Sites</span><b>{b.sites}</b></div><div><span>Incidents</span><b>{b.incidents}</b></div></div>{b.reason?<div className="ov-bu-note">{b.reason}</div>:null}</div>)}</div>
     </div>:null}
-    <div className="ov-panel"><div className="ov-panel-head"><h2><Activity size={15}/> Site Reliability<Help text="Each site's rollup: YTD and 30-day availability (from that site's devices), device health, incident count, criticality, and status. Coverage-gated per site; 'Insufficient' where evidence is thin."/></h2><span className="tag">{o.sites.length} sites</span></div>
+    <div className="ov-panel"><div className="ov-panel-head"><h2><Activity size={15}/> Site Reliability<Help text="Each site's rollup: YTD and 30-day availability (from that site's devices), device health, incident count, criticality, and status. Coverage-gated per site; 'Insufficient' where evidence is thin. The Devices column counts PHYSICAL switches — a stack of 6 switches counts as 6 here, even though LogicMonitor monitors that stack as one device. Everything shown is monitored."/></h2><span className="tag">{o.sites.length} sites</span></div>
       <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Site','City','Province','Business Unit','Availability YTD','30-Day','Devices','Device Health','Incidents','Status'].map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{sitePg.slice.map((s:any,i:number)=><tr key={i}><td className="mono"><b>{s.site_code||'—'}</b></td><td>{s.city}</td><td>{s.province||'—'}</td><td>{s.business_unit}</td><td className="mono" title={s.reason||''}>{s.availability_ytd!=null?pct3(s.availability_ytd):<span className="muted">Insufficient</span>}{s.since&&s.availability_ytd!=null?<small style={{display:'block',color:'var(--ov-faint)',fontSize:10,fontFamily:'var(--ov-sans)'}}>since {s.since}</small>:null}</td><td className="mono">{s.availability_30d!=null?pct3(s.availability_30d):<span className="muted">—</span>}</td><td className="mono">{s.devices}</td><td><span className={'ov-badge '+badge(s.device_health)}>{s.device_health}</span></td><td className="mono">{s.critical_devices}</td><td><span className={'ov-badge '+badge(s.status)}>{s.status}</span></td></tr>)}</tbody></table></div>{o.sites.length>0&&<Pager {...sitePg} label="sites"/>}
     </div>
   </div>;
