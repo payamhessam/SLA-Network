@@ -58,7 +58,12 @@ def _safe(v):
 
 
 def _pct(v):
-    return f"{v:.3f}%" if isinstance(v, (int, float)) else "Insufficient"
+    """Same meaningful-precision rule as the UI's shared fmtPct (frontend/src/format.ts):
+    round to 2 decimals, trim trailing zeros. Excel/PPTX must match the app, not diverge."""
+    if not isinstance(v, (int, float)):
+        return "Insufficient"
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
+    return (s or "0") + "%"
 
 
 def _status_hex(text: str) -> str:
@@ -366,7 +371,7 @@ def executive_excel(db: Session) -> Path:
     # ---- Supporting detail ----
     ws = _sheet(wb, "SLA by Device", "Per-device WTD/YTD availability, coverage-gated")
     _table(ws, ["Device", "Site", "WTD", "YTD", "Coverage YTD"],
-           [(e["hostname"], e["site"], _pct(e["wtd"]["availability"]), _pct(e["ytd"]["availability"]), f"{e['ytd']['coverage']:.1f}%") for e in s["devices"]])
+           [(e["hostname"], e["site"], _pct(e["wtd"]["availability"]), _pct(e["ytd"]["availability"]), _pct(e["ytd"]["coverage"])) for e in s["devices"]])
 
     ws = _sheet(wb, "Critical Applications", "Business-application SLAs (mapping pending). Critical-criticality infrastructure is shown as today's closest measured proxy.")
     crit = m["critical"]

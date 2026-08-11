@@ -266,7 +266,10 @@ def _aggregate(rows: list[SlaDaily]) -> dict:
         expected += sum(r.expected_minutes for r in measurable)
         observed += sum(r.observed_minutes for r in measurable)
         up += sum(r.up_minutes for r in measurable)
-    coverage = (100.0 * observed / expected) if expected else 0.0
+    # Capped at 100 (matches the single-day computation in day_metrics() above) — a device can
+    # report slightly more observed minutes than the nominal window length from poll-interval
+    # rounding at the boundary; coverage must never be a physically impossible >100%.
+    coverage = min(100.0, (100.0 * observed / expected)) if expected else 0.0
     availability = (100.0 * up / observed) if observed else None
     sufficient = coverage >= threshold and availability is not None
     return {

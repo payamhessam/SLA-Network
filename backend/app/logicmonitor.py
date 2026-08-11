@@ -104,17 +104,29 @@ class LogicMonitorClient:
             if len(items) > 1: return None, "Ambiguous"
         return None, "Not Found"
 
+    async def _paged_items(self, resource: str, extra_params: dict | None = None) -> list:
+        """Fetch every item across all pages (same pagination contract as devices()) so a
+        device with more than one page of properties/datasources/instances is never silently
+        truncated to just the first 1000."""
+        items, offset = [], 0
+        while True:
+            params = {"size": 1000, "offset": offset, **(extra_params or {})}
+            payload = await self.get(resource, params)
+            batch = self.body(payload).get("items", [])
+            items.extend(batch)
+            if len(batch) < 1000:
+                return items
+            offset += len(batch)
+
     async def properties(self, device_id: int):
-        payload = await self.get(f"/santaba/rest/device/devices/{device_id}/properties", {"size": 1000})
-        return {x.get("name"): x.get("value") for x in self.body(payload).get("items", []) if x.get("name")}
+        items = await self._paged_items(f"/santaba/rest/device/devices/{device_id}/properties")
+        return {x.get("name"): x.get("value") for x in items if x.get("name")}
 
     async def applied_datasources(self, device_id: int):
-        payload = await self.get(f"/santaba/rest/device/devices/{device_id}/devicedatasources", {"size": 1000})
-        return self.body(payload).get("items", [])
+        return await self._paged_items(f"/santaba/rest/device/devices/{device_id}/devicedatasources")
 
     async def instances(self, device_id: int, hds_id: int):
-        payload = await self.get(f"/santaba/rest/device/devices/{device_id}/devicedatasources/{hds_id}/instances", {"size": 1000})
-        return self.body(payload).get("items", [])
+        return await self._paged_items(f"/santaba/rest/device/devices/{device_id}/devicedatasources/{hds_id}/instances")
 
     async def instance_data(self, device_id: int, hds_id: int, instance_id: int, start: int, end: int):
         payload = await self.get(f"/santaba/rest/device/devices/{device_id}/devicedatasources/{hds_id}/instances/{instance_id}/data", {"start": start, "end": end})

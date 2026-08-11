@@ -470,6 +470,7 @@ export const GLOSSARY: { term: string; def: string }[] = [
   { term: "Rolling 7-day", def: "Availability over the trailing 7 days (last same-weekday to now). Always has a full week of data, so it never reads 'insufficient' early in the week." },
   { term: "Week-to-date (WTD)", def: "Availability from this Monday 00:00 to now. Reads 'insufficient' on Monday/Tuesday until enough of the week is observed." },
   { term: "Previous week", def: "Availability for the last complete calendar week (previous Monday to Sunday) — the number used for weekly reporting." },
+  { term: "Day/week boundary timezone", def: "'Today', 'this week', and every daily rollup use ONE company-wide clock (Pacific time), not each site's local timezone. A Halifax or Guelph site's day turns over a few hours before its own local midnight. This affects only which calendar day/week an event is filed under, not the underlying up/down minutes." },
   { term: "Throughput", def: "How much traffic is flowing, in bits per second. Estimated as link speed x utilisation, counting both directions (in + out)." },
   { term: "Busy-hour peak", def: "The single highest hourly fleet throughput over a window (e.g. 7 days) — the busiest moment, not an instantaneous snapshot." },
   { term: "95th percentile (p95)", def: "The throughput level exceeded only 5% of the time over the window — a robust 'typical busy' level that ignores one-off spikes. The same method carriers bill on." },

@@ -19,7 +19,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from . import kb, resilience, sla
-from .db import Device, InventoryDevice, InventoryDeviceType, Site, Snapshot, SshFacts, WanRouter
+from .db import Device, InventoryDevice, InventoryDeviceType, Site, SlaDaily, Snapshot, SshFacts, WanRouter
 
 WINDOWS = ("rolling_7", "wtd", "prev_week", "ytd")
 
@@ -31,27 +31,48 @@ def _num(x):
         return None
 
 
-def _latest_snap(db: Session, device_id: int) -> Snapshot | None:
-    return db.scalar(
-        select(Snapshot).where(Snapshot.device_id == device_id).order_by(Snapshot.collected_at.desc()).limit(1)
-    )
-
-
-def _dsw_ssh_tables(db: Session, legacy_id: int) -> dict:
-    facts = db.scalar(select(SshFacts).where(SshFacts.device_id == legacy_id))
-    if not facts or not isinstance(facts.data, dict):
+def _latest_snaps(db: Session, device_ids: list[int]) -> dict[int, Snapshot]:
+    """Latest Snapshot per device, in ONE query (not one SELECT per device — the naive
+    per-device version was measured firing 240+ queries for a 14-branch, 99-device fleet)."""
+    if not device_ids:
         return {}
-    tables = facts.data.get("tables", {}) if isinstance(facts.data.get("tables"), dict) else {}
-    return {"tables": tables, "collected_at": facts.collected_at.isoformat() if facts.collected_at else None}
+    sub = (
+        select(Snapshot.device_id, func.max(Snapshot.collected_at).label("mx"))
+        .where(Snapshot.device_id.in_(device_ids))
+        .group_by(Snapshot.device_id)
+        .subquery()
+    )
+    rows = db.scalars(
+        select(Snapshot).join(sub, (Snapshot.device_id == sub.c.device_id) & (Snapshot.collected_at == sub.c.mx))
+    ).all()
+    return {s.device_id: s for s in rows}
 
 
-def _branch_windows(db: Session, legacy_ids: list[int]) -> dict:
-    """Pooled and best-path availability for each window over the branch's devices."""
+def _dsw_ssh_facts(db: Session, legacy_ids: list[int]) -> dict[int, dict]:
+    """SshFacts for every branch DSW in one query instead of one SELECT per branch."""
+    if not legacy_ids:
+        return {}
+    out = {}
+    for facts in db.scalars(select(SshFacts).where(SshFacts.device_id.in_(legacy_ids))).all():
+        if not isinstance(facts.data, dict):
+            continue
+        tables = facts.data.get("tables", {}) if isinstance(facts.data.get("tables"), dict) else {}
+        out[facts.device_id] = {"tables": tables, "collected_at": facts.collected_at.isoformat() if facts.collected_at else None}
+    return out
+
+
+def _branch_windows(rows_by_device: dict[int, list], legacy_ids: list[int]) -> dict:
+    """Pooled and best-path availability for each window, from ALREADY-LOADED SlaDaily rows
+    (one fleet-wide query up front, aggregated here in memory) — same pattern sla.fleet_sla()
+    and reports.report_model() already use, instead of a SELECT per device per window."""
     ref = sla.today_local()
     out = {}
     for kind in WINDOWS:
         start, end = sla._window_bounds(kind, ref)
-        per_device = [sla.window(db, did, start, end) for did in legacy_ids]
+        per_device = []
+        for did in legacy_ids:
+            drows = [r for r in rows_by_device.get(did, []) if start <= r.day <= end]
+            per_device.append(sla._aggregate(drows))
         avails = [w["availability"] for w in per_device if w.get("availability") is not None]
         # pooled = sum(up)/sum(observed) across the branch (current method)
         up = sum(w.get("up_minutes", 0) for w in per_device)
@@ -123,10 +144,11 @@ def _failover(tables: dict, stack_members: int) -> dict:
     }
 
 
-def _wan_circuits(db: Session, dsw_mgmt_ip: str | None, default_nexthops: set[str]) -> list[dict]:
+def _wan_circuits(all_routers: list[WanRouter], dsw_mgmt_ip: str | None, default_nexthops: set[str]) -> list[dict]:
     """Map the branch to its WAN provider circuits: any WAN router whose management IP sits in
     the branch DSW's local /24 (the transit subnets), flagging the one that is the L3 default
-    next-hop as primary. This is the 'provider next-hop' mapping."""
+    next-hop as primary. This is the 'provider next-hop' mapping. `all_routers` is loaded ONCE
+    for the whole payload by the caller (was a fresh full-table SELECT per branch before)."""
     if not dsw_mgmt_ip:
         return []
     try:
@@ -134,7 +156,7 @@ def _wan_circuits(db: Session, dsw_mgmt_ip: str | None, default_nexthops: set[st
     except ValueError:
         return []
     out = []
-    for r in db.scalars(select(WanRouter)).all():
+    for r in all_routers:
         ip = r.management_ip or ""
         try:
             inside = ipaddress.ip_address(ip) in net
@@ -164,6 +186,20 @@ def build(db: Session, site_code: str | None = None) -> dict:
 
     # map inventory -> legacy Device (SLA/snapshots are keyed by legacy id)
     legacy_by_lm = {d.lm_device_id: d for d in db.scalars(select(Device).where(Device.lm_device_id.is_not(None))).all()}
+    all_legacy_ids = [legacy_by_lm[inv.logicmonitor_device_id].id for inv, *_ in rows if inv.logicmonitor_device_id in legacy_by_lm]
+
+    # Batch every per-device/per-branch lookup ONCE for the whole payload (was N+1: a fresh
+    # SELECT per device for snapshots, per device per window for SLA rows, per branch for SSH
+    # facts, and a full-table scan per branch for WAN routers — measured at 242 queries for a
+    # 14-branch fleet before this fix).
+    snap_by_id = _latest_snaps(db, all_legacy_ids)
+    ref = sla.today_local()
+    ytd_start, _ = sla._window_bounds("ytd", ref)
+    rows_by_device: dict[int, list] = {}
+    if all_legacy_ids:
+        for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(all_legacy_ids), SlaDaily.day >= ytd_start)).all():
+            rows_by_device.setdefault(r.device_id, []).append(r)
+    all_wan_routers = db.scalars(select(WanRouter)).all()
 
     branches: dict[str, dict] = {}
     for inv, type_code, sc, city, region in rows:
@@ -171,7 +207,7 @@ def build(db: Session, site_code: str | None = None) -> dict:
         if not legacy:
             continue
         b = branches.setdefault(sc, {"site_code": sc, "city": city, "region": region, "devices": [], "_dsw": None, "_dsw_ip": None, "_ids": []})
-        snap = _latest_snap(db, legacy.id)
+        snap = snap_by_id.get(legacy.id)
         # Canonical physical-chassis count (same function Device Fleet's "Total Network
         # Devices" and Overview's Site Reliability table use) so this branch's device count
         # agrees with those pages instead of a locally-invented estimate.
@@ -188,26 +224,30 @@ def build(db: Session, site_code: str | None = None) -> dict:
             b["_dsw"] = legacy.id
             b["_dsw_ip"] = inv.management_ip
 
+    dsw_ids = [b["_dsw"] or (b["_ids"][0] if b["_ids"] else None) for b in branches.values()]
+    dsw_ids = [d for d in dsw_ids if d is not None]
+    ssh_by_dsw = _dsw_ssh_facts(db, dsw_ids)
+
     out = []
     for sc, b in sorted(branches.items()):
         dsw_id = b["_dsw"] or (b["_ids"][0] if b["_ids"] else None)
-        ssh = _dsw_ssh_tables(db, dsw_id) if dsw_id else {}
+        ssh = ssh_by_dsw.get(dsw_id, {}) if dsw_id else {}
         ssh_tables = ssh.get("tables", {})
         # LM snapshot already carries CDP/LLDP neighbours + stack member count for the DSW.
         lm_tables, stack_members = {}, 1
         if dsw_id:
-            snap = _latest_snap(db, dsw_id)
+            snap = snap_by_id.get(dsw_id)
             if snap and isinstance(snap.details, dict):
                 lm_tables = snap.details.get("tables", {}) or {}
                 count, _src = resilience.physical_switch_count(snap.details)
                 stack_members = count if isinstance(count, int) and count else 1
         # SSH fills what LM can't (routing/HSRP/EtherChannel); SSH wins where both exist.
         tables = {**lm_tables, **ssh_tables}
-        windows = _branch_windows(db, b["_ids"])
+        windows = _branch_windows(rows_by_device, b["_ids"])
         failover = _failover(tables, stack_members)
         # WAN provider circuits mapped by default next-hop / transit subnet
         default_nexthops = {r.get("Next Hop") for r in (tables.get("Default Gateway", []) or []) if r.get("Next Hop")}
-        wan = _wan_circuits(db, b.get("_dsw_ip"), default_nexthops)
+        wan = _wan_circuits(all_wan_routers, b.get("_dsw_ip"), default_nexthops)
         failover["wan_circuits"] = len(wan)
         failover["wan_redundant"] = len(wan) >= 2
         # overall posture label
