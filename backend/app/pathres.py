@@ -110,6 +110,7 @@ def _failover(tables: dict, stack_members: int) -> dict:
         "northbound_redundant": north_redundant,
         "northbound_paths": northbound_paths,
         "dual_homed_access": dual_homed,
+        "access_neighbors": len(by_neighbor),
         "etherchannels_up": len(ether),
         "fhrp_groups": len(fhrp),
         "priority_routes": [
@@ -223,9 +224,15 @@ def build(db: Session, site_code: str | None = None) -> dict:
             provs = ", ".join(f"{c['provider']}{' (primary)' if c['is_primary'] else ''}" for c in wan)
             sev = "ok" if len(wan) >= 2 else "warning"
             failover.setdefault("findings", []).append({"severity": sev, "text": f"WAN circuits mapped: {provs}."})
+        # Device count reflects the whole branch: monitored inventory devices + access switches
+        # discovered via the DSW's CDP that aren't in inventory (same source as the "dual-homed" chip).
+        monitored = len(b["_ids"])
+        access_via_cdp = failover.get("access_neighbors", 0)
+        device_total = monitored + max(0, access_via_cdp - max(0, monitored - 1))
         out.append({
             "site_code": sc, "city": b["city"], "region": b["region"],
-            "device_count": len(b["devices"]), "devices": b["devices"],
+            "device_count": device_total, "monitored_count": monitored, "devices": b["devices"],
+            "dsw_device_id": b["_dsw"],  # legacy device id for the admin SSH-pull button
             "windows": windows, "failover": failover, "posture": posture,
             "ssh_collected_at": ssh.get("collected_at"),
             "wan_circuits": wan,

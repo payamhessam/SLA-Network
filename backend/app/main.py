@@ -119,16 +119,17 @@ def health(db: Session = Depends(session)):
 
 
 @app.get("/api/v1/path-resilience")
-def path_resilience(site: str | None = None, user=Depends(administrator), db: Session = Depends(session)):
-    """Admin-only: per-branch provider & path resilience (availability windows, failover
-    posture, priority routes). Optional ?site=CA15 to focus one branch."""
+def path_resilience(site: str | None = None, user=Depends(current_user), db: Session = Depends(session)):
+    """Per-branch provider & path resilience (availability windows, failover posture, priority
+    routes). Read-only for all authenticated users; SSH collection remains admin-only.
+    Optional ?site=CA15 to focus one branch."""
     return pathres.build(db, site_code=site)
 
 
 @app.get("/api/v1/throughput/window")
-def throughput_window(hours: int = 24, user=Depends(administrator), db: Session = Depends(session)):
-    """Admin-only: windowed fleet throughput (average / busy-hour peak / p95, in+out) from
-    stored snapshot history — the real 'how loaded is the network' figure. ?hours=24|168."""
+def throughput_window(hours: int = 24, user=Depends(current_user), db: Session = Depends(session)):
+    """Windowed fleet throughput (average / busy-hour peak / p95, in+out) from stored snapshot
+    history — the real 'how loaded is the network' figure. ?hours=24|168."""
     return overview.throughput_window(db, hours=hours)
 
 
