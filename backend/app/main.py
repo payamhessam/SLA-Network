@@ -187,9 +187,14 @@ def _ifkey(name):
     return s
 
 
-# SSH show-command output that is authoritative and should replace the LM display table
-# (LM cannot provide these columns at all, e.g. inventory PID/VID/serial).
-_SSH_AUTHORITATIVE = {"Inventory"}
+# SSH show-command output that is authoritative and should replace the LM display table even
+# when LM's own table is non-empty. "Inventory": LM cannot provide these columns at all (PID/
+# VID/serial). "CDP-LLDP Neighbors": LM's neighbor-discovery instances can go stale (observed
+# live 2026-08-12 - a device's LLDP_Neighbors datasource kept reporting a neighbor set that no
+# longer matched a fresh `show cdp/lldp neighbors detail` on the box), and a stale non-empty LM
+# table was silently winning over a freshly admin-verified SSH pull. An admin-run SSH collection
+# is ground truth for topology at the moment it was taken; LM's automated discovery can lag it.
+_SSH_AUTHORITATIVE = {"Inventory", "CDP-LLDP Neighbors"}
 
 
 @app.get("/api/v1/devices/{device_id}/detail")
