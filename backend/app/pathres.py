@@ -89,11 +89,16 @@ def _branch_windows(rows_by_device: dict[int, list], legacy_ids: list[int]) -> d
     return out
 
 
+_ETHER_UP = ("SU", "RU")  # in-use: S=Layer2/R=Layer3 bundle, U=in-use (routed port-channels use "RU", not just "SU")
+
+
 def _failover(tables: dict, stack_members: int) -> dict:
     """Derive the branch's redundancy/failover posture from the collected tables."""
     default_gw = tables.get("Default Gateway", []) or []
     fhrp = tables.get("Gateway Redundancy", []) or []
-    ether = [r for r in (tables.get("EtherChannel", []) or []) if str(r.get("Status", "")).startswith("SU")]
+    ether_all = tables.get("EtherChannel", []) or []
+    ether = [r for r in ether_all if str(r.get("Status", "")).startswith(_ETHER_UP)]
+    ether_down = [r for r in ether_all if str(r.get("Status", "")).strip() and not str(r.get("Status", "")).startswith(_ETHER_UP)]
     neighbors = tables.get("CDP-LLDP Neighbors", []) or []
 
     # access dual-homing: a neighbour that appears on 2+ local interfaces is dual-homed
@@ -109,22 +114,35 @@ def _failover(tables: dict, stack_members: int) -> dict:
 
     dist_redundant = stack_members >= 2
     access_redundant = dual_homed > 0 or len(ether) > 0
-    north_redundant = northbound_paths >= 2 or len(fhrp) > 0
+    # FHRP (HSRP/VRRP) protects the LAN-side default gateway for downstream hosts between two
+    # local chassis — it says nothing about whether the WAN uplink itself has a second path.
+    # Northbound/WAN redundancy must be judged on actual route diversity, not FHRP presence,
+    # or a branch with HSRP on its access VLAN but a single WAN path reads as "fully redundant".
+    north_redundant = northbound_paths >= 2
 
     findings = []
     if default_gw:
-        if northbound_paths <= 1 and not fhrp:
+        if northbound_paths <= 1:
             findings.append({"severity": "warning", "text": (
                 f"Single northbound Layer-3 path (default route via {next(iter(nexthops), '?')}, no floating "
-                "backup and no HSRP/VRRP). One upstream failure isolates the branch.")})
+                "backup). One upstream failure isolates the branch." + (
+                    " HSRP/VRRP is present but only protects the local LAN gateway, not the WAN path." if fhrp else ""))})
         else:
-            findings.append({"severity": "ok", "text": f"{northbound_paths} default-route next-hop(s) / FHRP present."})
+            findings.append({"severity": "ok", "text": f"{northbound_paths} default-route next-hop(s) present."})
     if stack_members >= 2:
         findings.append({"severity": "ok", "text": f"Distribution is a {stack_members}-member stack (supervisor redundancy)."})
     elif stack_members == 1:
         findings.append({"severity": "warning", "text": "Distribution is a single (non-stacked) switch — no supervisor redundancy."})
     if access_redundant:
         findings.append({"severity": "ok", "text": f"{dual_homed} access switch(es) dual-homed / {len(ether)} EtherChannel bundle(s) up."})
+    else:
+        findings.append({"severity": "warning", "text": "No dual-homed access switches and no EtherChannel bundles up — a single link/port failure can isolate an access switch."})
+    if ether_down:
+        findings.append({"severity": "warning", "text": f"{len(ether_down)} EtherChannel bundle(s) configured but not in use (down/suspended) — check for a one-sided LACP mode or allowed-VLAN mismatch."})
+    if fhrp:
+        no_preempt = [r for r in fhrp if str(r.get("Preempt") or "").strip().lower() not in ("p", "yes", "enabled", "true")]
+        if no_preempt:
+            findings.append({"severity": "warning", "text": f"{len(no_preempt)} HSRP/VRRP group(s) without preempt — the recovering chassis won't reclaim active role after a failover, so traffic can keep riding the unintended path."})
 
     return {
         "distribution_redundant": dist_redundant,
@@ -134,6 +152,7 @@ def _failover(tables: dict, stack_members: int) -> dict:
         "dual_homed_access": dual_homed,
         "access_neighbors": len(by_neighbor),
         "etherchannels_up": len(ether),
+        "etherchannels_down": len(ether_down),
         "fhrp_groups": len(fhrp),
         "priority_routes": [
             {"priority": r.get("Priority"), "prefix": r.get("Prefix"), "next_hop": r.get("Next Hop"),
