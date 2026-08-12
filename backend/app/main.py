@@ -197,6 +197,23 @@ def _ifkey(name):
 _SSH_AUTHORITATIVE = {"Inventory", "CDP-LLDP Neighbors"}
 
 
+def _identity_check(item: Device, ssh_data: dict) -> dict | None:
+    """Compare the device's OWN self-reported hostname (from its config/version banner, see
+    ssh_collect._reported_hostname) against what our inventory expects at this IP. Catches
+    exactly the class of bug found 2026-08-12: LogicMonitor's management-IP-to-device mapping
+    went stale for one device, and every automated signal (LM discovery, our own prior SSH
+    collection) silently agreed with the wrong IP because nothing ever asked the device itself
+    who it actually was. Returns None when no hostname/version banner was captured at all
+    (nothing to check), otherwise a dict the caller can act on and surface to the UI."""
+    # Fall back to recomputing from the raw config/version text for SshFacts rows collected
+    # before "reported_hostname" was stored explicitly - the underlying text was always saved.
+    reported = ssh_data.get("reported_hostname") or ssh_collect._reported_hostname(ssh_data.get("raw") or {})
+    if not reported:
+        return None
+    match = reported.strip().lower() == (item.hostname or "").strip().lower()
+    return {"expected": item.hostname, "reported": reported, "match": match}
+
+
 @app.get("/api/v1/devices/{device_id}/detail")
 def device_detail(device_id: int, user=Depends(current_user), db: Session = Depends(session)):
     item = db.get(Device, device_id)
@@ -248,8 +265,13 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
         gaps = by_name.get("Monitoring Gaps")
         if gaps:
             gaps["rows"] = [g for g in gaps["rows"] if not (by_name.get(g.get("Metric"), {}) or {}).get("rows")]
+        # Recomputed at read-time (not just trusted from storage) so it also covers SSH facts
+        # collected before this check existed - the raw config/version text needed for it was
+        # already being stored, only the comparison itself is new.
+        identity = _identity_check(item, facts.data)
         ssh_meta = {"collected_at": facts.collected_at.isoformat() if facts.collected_at else None,
-                    "collected_by": facts.collected_by, "status": facts.status, "has_config": bool(facts.data.get("config"))}
+                    "collected_by": facts.collected_by, "status": facts.status, "has_config": bool(facts.data.get("config")),
+                    "identity_check": identity}
     return {"device": DeviceOut.model_validate(item), "tables": tables, "source": "LogicMonitor read-only API", "ssh": ssh_meta}
 
 
@@ -283,18 +305,25 @@ def manual_collect(device_id: int, body: ManualCollect, user=Depends(administrat
         raise HTTPException(404, "Device not found")
     result = ssh_collect.parse_transcript(body.transcript)
     outcome = result.get("status")
+    identity = _identity_check(item, result.get("data") or {}) if outcome == "ok" else None
     db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.manual_collect", target=f"device:{device_id}",
-                      details={"result": outcome, "recognised": (result.get("data") or {}).get("recognised")}))
+                      details={"result": outcome, "recognised": (result.get("data") or {}).get("recognised"),
+                               "identity_check": identity}))
+    if identity and not identity["match"]:
+        db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.identity_mismatch", target=f"device:{device_id}",
+                          details=identity))
     if outcome != "ok":
         db.commit()
         return {"status": outcome, "message": result.get("message")}
+    result["data"]["identity_check"] = identity
     facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id)) or SshFacts(device_id=device_id)
     facts.host = item.management_ip or ""; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
     facts.collected_at = datetime.now(timezone.utc); facts.data = result["data"]
     db.add(facts); db.commit()
     return {"status": "ok", "collected_at": facts.collected_at.isoformat(), "collected_by": facts.collected_by,
             "tables": {k: v for k, v in result["data"]["tables"].items() if k != "_if_status"},
-            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config"))}
+            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config")),
+            "identity_check": identity}
 
 
 class SshRequest(BaseModel):
@@ -319,18 +348,24 @@ def ssh_collect_device(request: Request, device_id: int, body: SshRequest, user=
         return {"status": "no_ip", "message": "This device has no Management IP on record, so SSH cannot be attempted."}
     result = ssh_collect.collect(host, "pa-phessamfar", body.password)
     outcome = result.get("status")
+    identity = _identity_check(item, result.get("data") or {}) if outcome == "ok" else None
     db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.ssh_collect", target=f"device:{device_id}",
-                      details={"host": host, "result": outcome}))  # never logs the password
+                      details={"host": host, "result": outcome, "identity_check": identity}))  # never logs the password
+    if identity and not identity["match"]:
+        db.add(AuditEvent(actor=user.get("sub", "admin"), action="device.identity_mismatch", target=f"device:{device_id}",
+                          details=identity))
     if outcome != "ok":
         db.commit()
         return {"status": outcome, "message": result.get("message")}
+    result["data"]["identity_check"] = identity
     facts = db.scalar(select(SshFacts).where(SshFacts.device_id == device_id)) or SshFacts(device_id=device_id)
     facts.host = host; facts.status = "ok"; facts.collected_by = user.get("sub", "admin")
     facts.collected_at = datetime.now(timezone.utc); facts.data = result["data"]
     db.add(facts); db.commit()
     return {"status": "ok", "collected_at": facts.collected_at.isoformat(), "collected_by": facts.collected_by,
             "tables": {k: v for k, v in result["data"]["tables"].items() if k != "_if_status"},
-            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config"))}
+            "recognised": result["data"].get("recognised"), "has_config": bool(result["data"].get("config")),
+            "identity_check": identity}
 
 
 @app.get("/api/v1/devices/{device_id}/ssh-config")

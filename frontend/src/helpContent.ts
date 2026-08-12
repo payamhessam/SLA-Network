@@ -456,7 +456,7 @@ export const ARTICLES: Article[] = [
     what: "An admin-only button that connects to the device over SSH (approved by push MFA) and runs read-only Cisco 'show' commands to fill the gaps LogicMonitor can't — VLANs, interface details, neighbours, inventory, routing, spanning tree, PoE, logs and config.",
     why: "Some data simply isn't in LogicMonitor; this gets it directly, safely.",
     good: "Strictly read-only — only 'show' commands, never any change. The password is used for one session and never stored. Device secrets in the config are removed before saving.",
-    tech: "Results are saved and shown until the next pull. Also reads the device log to fill Alerts and produce Cisco-knowledge recommendations.",
+    tech: "Results are saved and shown until the next pull. Also reads the device log to fill Alerts and produce Cisco-knowledge recommendations. Every pull also checks the device's OWN configured hostname (from its running-config or 'show version' banner) against what this record expects. If they don't match, a red banner appears — this catches LogicMonitor's management-IP-to-device mapping going stale (confirmed live 2026-08-12: one device's LM record silently pointed at a different physical switch after a network change), because the device itself can't lie about who it is the way an out-of-date inventory record can.",
     related: ["monitoring-gaps", "alerts", "recommendations"] },
   { id: "alerts", cat: "Device Details", name: "Alerts", synonyms: ["alerts", "syslog", "logs", "events"],
     short: "Events from the device log, with severity, source and message.",

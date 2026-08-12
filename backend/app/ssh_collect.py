@@ -576,6 +576,21 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
     return tables
 
 
+def _reported_hostname(raw: dict) -> str | None:
+    """The device's OWN idea of its hostname, from its running-config 'hostname' line or the
+    'show version' uptime banner ('<hostname> uptime is ...') — whichever is present. This is
+    ground truth for device identity: unlike LogicMonitor's management-IP-to-name mapping
+    (which can go stale if a device is re-IP'd, swapped, or LM's inventory is simply wrong),
+    the device itself cannot lie about its own configured hostname."""
+    cfg = raw.get("config") or ""
+    m = re.search(r"^hostname (\S+)", cfg, re.MULTILINE)
+    if m:
+        return m.group(1)
+    ver = raw.get("version") or ""
+    m = re.search(r"^(\S+) uptime is", ver, re.MULTILINE)
+    return m.group(1) if m else None
+
+
 def parse_transcript(transcript: str) -> dict:
     """Parse an admin-pasted `show`-command transcript into the device-detail tables.
     Returns a status dict; on success `data` holds the normalised tables, the running-config
@@ -596,7 +611,8 @@ def parse_transcript(transcript: str) -> dict:
     return {
         "status": "ok",
         "data": {"tables": tables, "config": config, "raw": raw, "commands": COMMANDS,
-                 "recognised": sorted(k for k in blocks if not _unsupported(blocks[k]))},
+                 "recognised": sorted(k for k in blocks if not _unsupported(blocks[k])),
+                 "reported_hostname": _reported_hostname(raw)},
     }
 
 

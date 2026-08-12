@@ -114,3 +114,26 @@ def test_interface_state_buckets_always_sum_to_total():
     assert result["total"] == 4
     assert result["up"] + result["down"] + result["disabled"] + result["unknown"] == result["total"]
     assert (result["up"], result["down"], result["disabled"], result["unknown"]) == (1, 1, 1, 1)
+
+
+# ---- ssh_collect._reported_hostname must extract a device's OWN configured hostname from
+# either its running-config or its "show version" uptime banner, so device_detail() can catch
+# a stale LogicMonitor management-IP mapping (2026-08-12: LM's inventory pointed the
+# "CA07-Z01-DAS-01" record at a management IP that actually belonged to "ca14-z01-dsw-01" -
+# every automated signal agreed with the wrong IP because nothing ever asked the device itself
+# who it was). ----
+def test_reported_hostname_from_config_line():
+    from app import ssh_collect
+    raw = {"config": "!\nhostname ca07-z01-das-01\n!\nvrf definition Mgmt-vrf\n"}
+    assert ssh_collect._reported_hostname(raw) == "ca07-z01-das-01"
+
+
+def test_reported_hostname_falls_back_to_version_banner_when_no_config():
+    from app import ssh_collect
+    raw = {"version": "Cisco IOS XE Software, Version 17.06.05\nca14-z01-dsw-01 uptime is 1 year, 8 weeks\n"}
+    assert ssh_collect._reported_hostname(raw) == "ca14-z01-dsw-01"
+
+
+def test_reported_hostname_none_when_neither_present():
+    from app import ssh_collect
+    assert ssh_collect._reported_hostname({}) is None
