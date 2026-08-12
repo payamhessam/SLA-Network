@@ -34,7 +34,13 @@ def routing(db: Session, fleet):
         items.append({
             "device_id": d["device_id"], "hostname": d["hostname"], "city": d["city"],
             "neighbors": len(rows), "full": full, "neighbor_events": events,
-            "status": "HEALTHY" if full == len(rows) and events == 0 else ("DEGRADED" if full < len(rows) else "WARNING"),
+            # "CRITICAL" (not "DEGRADED") for a neighbor stuck below FULL: Overview uses "DEGRADED"
+            # for a lesser mid-tier condition on its own severity scale, and both pages' badge()
+            # colorers read the same word as the same color — reusing it here for a genuinely
+            # broken adjacency would silently downgrade its color on this page. "WARNING" (full,
+            # but with neighbor events) is a real but lesser concern than an adjacency that never
+            # completed at all.
+            "status": "HEALTHY" if full == len(rows) and events == 0 else ("CRITICAL" if full < len(rows) else "WARNING"),
             "peers": [{"neighbor": r.get("Neighbor"), "state": r.get("State"), "events": r.get("Neighbor Events")} for r in rows],
         })
     items.sort(key=lambda x: (x["full"] == x["neighbors"], x["hostname"]))

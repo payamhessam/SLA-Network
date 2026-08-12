@@ -353,9 +353,13 @@ def throughput(db: Session, fleet: list[dict]) -> dict:
     is a gross aggregate, not a WAN-egress figure; that caveat is returned with the value."""
     total_bps = 0.0
     counted = 0
+    oldest_contributing = None  # oldest snapshot that actually fed a counted interface, not the
+                                 # fleet's freshest device — the two can differ by a full refresh
+                                 # cycle since switch_refresh.py polls devices one at a time.
     for d in fleet:
         snap = d["snap"]
         rows = (snap.details or {}).get("tables", {}).get("Interfaces", []) if snap and isinstance(snap.details, dict) else []
+        contributed = False
         for r in rows or []:
             if str(r.get("Status")) != "up":
                 continue
@@ -365,12 +369,17 @@ def throughput(db: Session, fleet: list[dict]) -> dict:
             if speed and speed > 0:
                 total_bps += speed * in_out / 100.0
                 counted += 1
+                contributed = True
+        if contributed and snap and snap.collected_at:
+            if oldest_contributing is None or snap.collected_at < oldest_contributing:
+                oldest_contributing = snap.collected_at
     if counted == 0:
         return {"available": False, "reason": "No interface utilisation/speed collected yet.", "value": None, "unit": None}
     gbps = total_bps / 1e9
     value, unit = (round(gbps, 2), "Gbps") if gbps >= 1 else (round(total_bps / 1e6, 1), "Mbps")
     return {"available": True, "value": value, "unit": unit, "interfaces": counted,
             "label": "Snapshot utilisation (instant)",
+            "oldest_contributing_sync": oldest_contributing.isoformat() if oldest_contributing else None,
             "note": ("Point-in-time in+out across all monitored up interfaces at the last poll — "
                      "not a busy-hour or average. See Path Resilience for the windowed peak/average.")}
 

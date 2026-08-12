@@ -17,7 +17,6 @@ import{fmtPct}from'./format';
 
 type Props={token:string;administrator:boolean};
 const badge=(s:string)=>{const x=(s||'').toLowerCase();if(x.includes('healthy')||x.includes('monitored')&&!x.includes('not'))return'ok';if(x.includes('warn')||x.includes('applied'))return'warn';if(x.includes('critical'))return'crit';return'unknown'};
-const num=(v:any,d=0)=>typeof v==='number'?v.toFixed(d):'—';
 const reach=(v:any)=>fmtPct(v);
 
 export default function WanProviders({token,administrator}:Props){
@@ -128,7 +127,7 @@ function WanDetail({d,back,tab,setTab,admin,busy,refresh}:{d:any;back:()=>void;t
     <div className="ov-kpis" style={{gridTemplateColumns:'repeat(5,1fr)'}}>
       <Kpi label="Status" value={(d.status||'Unknown').toUpperCase()} sub="Informational only"/>
       <Kpi label="Reachability 24h" value={reach(d.reachability)} sub="Ping success"/>
-      <Kpi label="CPU / Memory" value={`${num(d.cpu)} / ${num(d.memory)}%`} sub="Latest sample"/>
+      <Kpi label="CPU / Memory" value={`${fmtPct(d.cpu)} / ${fmtPct(d.memory)}`} sub="Latest sample"/>
       <Kpi label="BGP established" value={`${det.counts?.bgp_established??0}/${det.counts?.bgp_peers??0}`} sub="Peers"/>
       <Kpi label="OSPF full" value={det.counts?.ospf_full??0} sub={`${det.counts?.interfaces_up??0}/${det.counts?.interfaces??0} interfaces up`}/>
     </div>

@@ -95,3 +95,22 @@ def test_branch_windows_batched_matches_naive_per_device_aggregation():
     out = pathres._branch_windows(rows_by_device, [1, 2])
     assert out[kind]["pooled"] == naive_pooled
     assert out[kind]["best_path"] == naive_best
+
+
+# ---- telemetry.interfaces() must partition every interface into exactly one of
+# up/down/disabled/unknown, so total never silently disagrees with their sum (2026-08-12 audit:
+# the fleet-wide Interface/Circuit Health tiles showed total=1633 but up+down=264, with the
+# other 1369 interfaces silently dropped from every count). ----
+def test_interface_state_buckets_always_sum_to_total():
+    from app import telemetry
+    snap = SimpleNamespace(details={"tables": {"Interfaces": [
+        {"Status": "up", "Admin State": "up", "Interface": "Gi1/0/1"},
+        {"Status": "down", "Admin State": "up", "Interface": "Gi1/0/2"},        # real problem
+        {"Status": "down", "Admin State": "down", "Interface": "Gi1/0/3"},      # intentionally disabled
+        {"Status": "unknown", "Admin State": "unknown", "Interface": "Gi1/0/4"},  # no LM data
+    ]}})
+    fleet = [{"device_id": 1, "hostname": "sw1", "city": "Test", "snap": snap}]
+    result = telemetry.interfaces(None, fleet)
+    assert result["total"] == 4
+    assert result["up"] + result["down"] + result["disabled"] + result["unknown"] == result["total"]
+    assert (result["up"], result["down"], result["disabled"], result["unknown"]) == (1, 1, 1, 1)
