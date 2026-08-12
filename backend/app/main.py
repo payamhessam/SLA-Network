@@ -297,12 +297,15 @@ class SshRequest(BaseModel):
 
 
 @app.post("/api/v1/devices/{device_id}/ssh-collect")
-def ssh_collect_device(device_id: int, body: SshRequest, user=Depends(administrator), db: Session = Depends(session)):
+@limiter.limit("5/minute")
+def ssh_collect_device(request: Request, device_id: int, body: SshRequest, user=Depends(administrator), db: Session = Depends(session)):
     """Admin-only: connect over READ-ONLY SSH and fill the LogicMonitor gaps. Username is
     fixed to pa-phessamfar; the target is the device Management IP. The call blocks while the
     device's auth backend waits for the administrator's push-MFA (Microsoft Authenticator)
     approval, then runs the fixed `show`-command allow-list. The password is used for one
-    session and never stored or logged."""
+    session and never stored or logged. Rate-limited so a compromised admin token or a buggy
+    script can't hammer the real device account with repeated auth attempts or MFA-fatigue the
+    admin's phone with push prompts."""
     item = db.get(Device, device_id)
     if not item:
         raise HTTPException(404, "Device not found")
@@ -380,7 +383,8 @@ async def import_devices(file:UploadFile=File(...), user=Depends(administrator),
 
 
 @app.post("/api/v1/collections/run")
-async def collect(user=Depends(current_user), db:Session=Depends(session)):
+@limiter.limit("5/minute")
+async def collect(request: Request, user=Depends(current_user), db:Session=Depends(session)):
     if user["role"] not in {"Administrator","Network Engineer"}: raise HTTPException(403,"Collection permission required")
     client=LogicMonitorClient(); matched=0; collected=0; failures=[]
     for item in db.scalars(select(Device).where(Device.active.is_(True))).all():

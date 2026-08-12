@@ -41,8 +41,13 @@ def _verify(password: str, stored: str) -> bool:
 
 def authenticate(username: str, password: str) -> str | None:
     settings = get_settings()
-    if username == "admin" and _verify(password, settings.admin_password): return "Administrator"
-    if username == "user" and _verify(password, settings.user_password): return "Read-Only Viewer"
+    if username == "admin":
+        return "Administrator" if _verify(password, settings.admin_password) else None
+    if username == "user":
+        return "Read-Only Viewer" if _verify(password, settings.user_password) else None
+    # Unknown username: still pay the same Argon2/compare cost a real check would, so response
+    # latency can't be used to distinguish "no such user" from "wrong password" (timing side-channel).
+    _verify(password, settings.admin_password)
     return None
 
 
