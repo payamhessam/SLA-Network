@@ -293,8 +293,10 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
     {icon:<Terminal size={14}/>,label:'OS version',value:clean(health['OS']),mono:true},
   ];
   const statusClass=(v:any)=>{const s=String(v).toLowerCase();if(/healthy|normal|^up$|forwarding/.test(s))return'ok';if(/warn|degrad|listening|learning/.test(s))return'warn';if(/crit|down|fault|error|block/.test(s))return'crit';return'neutral'};
+  const alertClass=(v:any)=>{const s=String(v).toLowerCase();if(/emergency|alert|critical|error|^p1$/.test(s))return'crit';if(/warning|^p2$/.test(s))return'warn';return'neutral'};
   const cell=(col:string,value:any)=>{
     if(col==='Status'&&value!=null&&value!=='')return <span className={'dv-status dv-'+statusClass(value)}><span className="dv-dot"/>{String(value)}</span>;
+    if((col==='Severity'||col==='Priority')&&value!=null&&value!=='')return <span className={'dv-alert-level dv-'+alertClass(value)}>{String(value)}</span>;
     const shown=value??'Not available from LogicMonitor';
     return <span className={missingText(shown)?'dv-missing':undefined}>{String(shown)}</span>;
   };
@@ -333,7 +335,7 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
       {table.name==='CDP-LLDP Neighbors'&&table.rows.length
         ?<NeighborTopology device={device} rows={table.rows}/>
         :table.rows.length
-          ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{displayColumns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i}>{displayColumns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
+          ?<div className="dv-table-scroll"><table className="dv-table"><thead><tr>{displayColumns.map((c:string)=><th key={c}>{c}</th>)}</tr></thead><tbody>{table.rows.map((row:any,i:number)=><tr key={i} className={table.name==='Alerts'?'dv-alert-row-'+alertClass(row.Severity):undefined}>{displayColumns.map((c:string)=><td key={c}>{cell(c,row[c])}</td>)}</tr>)}</tbody></table></div>
           :<div className="dv-empty"><AlertTriangle size={26}/><h3>{table.evidence_status}</h3><p>This table is ready and will populate when the corresponding LogicMonitor DataSource is discovered and authorized{administrator?', or when an administrator fills it via a manual device collection':''}. Missing evidence is not displayed as zero.</p><div className="dv-column-list">{displayColumns.map((c:string)=><span key={c}>{c}</span>)}</div></div>}
     </section>
     {sshOpen&&<div className="dv-modal-back" onClick={()=>!sshBusy&&setSshOpen(false)}><div className="dv-modal dv-modal-wide" onClick={e=>e.stopPropagation()}>

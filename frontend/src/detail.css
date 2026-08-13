@@ -86,6 +86,10 @@
 .dv-status.dv-warn{color:var(--dv-warn);background:var(--dv-warn-bg)}
 .dv-status.dv-crit{color:var(--dv-crit);background:var(--dv-crit-bg)}
 .dv-status.dv-neutral{color:var(--dv-on-variant);background:var(--dv-surface-high)}
+.dv-alert-level{display:inline-flex;align-items:center;font-family:var(--dv-mono);font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.dv-alert-level.dv-crit{color:var(--dv-crit);background:var(--dv-crit-bg)}.dv-alert-level.dv-warn{color:var(--dv-warn);background:var(--dv-warn-bg)}.dv-alert-level.dv-neutral{color:var(--dv-on-variant);background:var(--dv-surface-high)}
+.dv-table tbody tr.dv-alert-row-crit td{background:color-mix(in srgb,var(--dv-crit-bg) 62%,transparent)}.dv-table tbody tr.dv-alert-row-warn td{background:color-mix(in srgb,var(--dv-warn-bg) 62%,transparent)}
+.dv-table tbody tr.dv-alert-row-crit:hover td,.dv-table tbody tr.dv-alert-row-warn:hover td{background:var(--dv-surface-high)}
 
 /* Empty state */
 .dv-empty{padding:48px 24px;text-align:center;color:var(--dv-on-variant)}
