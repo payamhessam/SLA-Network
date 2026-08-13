@@ -12,7 +12,7 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("LOCAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
 os.environ.setdefault("LOCAL_USER_PASSWORD", "viewer-password-long")
-os.environ.setdefault("JWT_SECRET", "test-secret-long-enough")
+os.environ.setdefault("JWT_SECRET", "test-secret-long-enough-32-bytes")
 
 from app import reports, sla
 
@@ -95,6 +95,21 @@ def test_branch_windows_batched_matches_naive_per_device_aggregation():
     out = pathres._branch_windows(rows_by_device, [1, 2])
     assert out[kind]["pooled"] == naive_pooled
     assert out[kind]["best_path"] == naive_best
+
+
+def test_branch_windows_never_publish_pooled_availability_without_coverage():
+    """An insufficient branch must not leak a raw pooled percentage."""
+    from app import pathres
+    from app.sla import _window_bounds, today_local
+
+    d = today_local()
+    kind = next(k for k in pathres.WINDOWS if _window_bounds(k, d)[0] <= d <= _window_bounds(k, d)[1])
+    # 10 observed minutes in a day is below the 90% coverage gate.
+    out = pathres._branch_windows({1: [_day(1440, 10, 10, device_id=1, day=d)]}, [1])
+
+    assert out[kind]["status"] == "Insufficient evidence"
+    assert out[kind]["best_path"] is None
+    assert out[kind]["pooled"] is None
 
 
 # ---- telemetry.interfaces() must partition every interface into exactly one of

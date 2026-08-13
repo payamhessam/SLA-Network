@@ -78,7 +78,10 @@ def _branch_windows(rows_by_device: dict[int, list], legacy_ids: list[int]) -> d
         # pooled = sum(up)/sum(observed) across the branch (current method)
         up = sum(w.get("up_minutes", 0) for w in per_device)
         obs = sum(w.get("observed_minutes", 0) for w in per_device)
-        pooled = round(100.0 * up / obs, 4) if obs else None
+        # Do not publish a pooled percentage if no device met SLA evidence coverage.
+        # A raw up/observed division here could otherwise turn an insufficient branch
+        # into a reassuring-looking percentage while best_path correctly remains None.
+        pooled = round(100.0 * up / obs, 4) if avails and obs else None
         # best-path proxy = the best-covered device kept a path
         best = round(max(avails), 4) if avails else None
         out[kind] = {

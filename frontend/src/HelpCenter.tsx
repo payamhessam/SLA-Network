@@ -28,7 +28,7 @@ function whyLines(live:string,e:any):string[]{
       if(e.incidents?.count)out.push(`There were ${e.incidents.count} availability-derived incident(s) in the last ${e.incidents.window_days} days.`);
       return out;}
     case'criticality':{const b=e.criticality?.bands||{};return[
-      `There are ${e.criticality?.total} devices in the fleet: ${b.Critical||0} Critical, ${b.High||0} High, ${b.Standard||0} Standard.`,
+      `There are ${e.criticality?.total} devices in the fleet: ${b.Critical||0} Critical, ${b.High||0} High, ${b.Medium||0} Medium, ${b.Low||0} Low.`,
       `${e.criticality?.degraded||0} are degraded and ${e.criticality?.unreachable||0} are unreachable right now.`];}
     case'business_units':return(e.business_units||[]).map((b:any)=>`${b.name}: ${pct(b.ytd)} YTD across ${b.devices} devices and ${b.sites} site(s), ${b.incidents} incident(s) — ${b.status}.${b.reason?' '+b.reason:''}`);
     case'worst_site':return e.worst_site?[`The lowest-availability site is ${e.worst_site.city} (${e.worst_site.site}) at ${pct(e.worst_site.ytd)} year-to-date.`]:['No site is currently below target.'];

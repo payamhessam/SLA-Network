@@ -70,7 +70,7 @@ LogicMonitor account.
   by its weakest critical node.
 - **Incidents / MTTR / MTBF** = derived from availability history (contiguous below-100% days). They
   are approximate; exact start/stop timings would require LogicMonitor alert history.
-- **Criticality** = the business importance you set per device (Critical / High / Standard).
+- **Criticality** = the business importance you set per device (Critical / High / Medium / Low).
 
 **Semantic status words** you'll see everywhere and what they mean:
 - **HEALTHY / OK / Target met** — good, with sufficient evidence.
@@ -97,7 +97,7 @@ LogicMonitor call on load), so it is fast and reconciles with the other pages.
 - **Export buttons** — generate an **Executive Excel** workbook or **Executive PowerPoint** deck
   from the live numbers.
 - **Global SLA Status** (ring) — 30-day fleet availability vs target, with the delta and status.
-- **Device Criticality** (donut) — all Fleet devices by Critical/High/Standard; centre = fleet size.
+- **Device Criticality** (donut) — all Fleet devices by Critical/High/Medium/Low; centre = fleet size.
 - **7-Day Availability** (bars) — availability per day for the last week; red bars = below target.
 - **Aggregate Throughput** — live aggregate interface traffic (Σ speed × utilisation over up
   interfaces). A gross fleet aggregate, not WAN egress.

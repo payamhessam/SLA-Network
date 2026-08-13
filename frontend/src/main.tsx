@@ -50,7 +50,7 @@ function PathResilience({administrator}:{administrator:boolean}){
     <div className="pr-kpis">
       <div className="pr-kpi info"><div className="k-l">BRANCHES <Help text="Distinct sites (branch offices) with at least one LogicMonitor-mapped device in Device Fleet."/></div><div className="k-v">{B.length}</div></div>
       <div className="pr-kpi ok"><div className="k-l">FULLY REDUNDANT <Help text="Branches that are east-west redundant (stacked distribution + dual-homed access) AND have either multiple L3 default paths or two or more WAN provider circuits."/></div><div className="k-v">{fully}</div></div>
-      <div className="pr-kpi warn"><div className="k-l">SINGLE L3 DEFAULT <Help text="Branches whose DSW has exactly one default route next-hop and no HSRP/VRRP — a single Layer-3 path out, even if backup circuits exist physically."/></div><div className="k-v">{singleL3}</div></div>
+      <div className="pr-kpi warn"><div className="k-l">SINGLE L3 DEFAULT <Help text="Branches whose DSW has at most one default route next-hop — a single Layer-3 path out, even if backup circuits or FHRP exist. HSRP/VRRP protects the first-hop gateway, not the northbound WAN path."/></div><div className="k-v">{singleL3}</div></div>
       <div className="pr-kpi"><div className="k-l">7-DAY PEAK <Help text="The busiest hourly fleet throughput (in+out) seen in the last 7 days. See Fleet Throughput below."/></div><div className="k-v">{tp&&tp.available?`${tp.peak.value} ${tp.peak.unit}`:'—'}</div></div>
     </div>
     {tp&&tp.available&&<><div className="pr-sec">Fleet Throughput · last 7 days (in + out)</div>
@@ -78,7 +78,7 @@ function PathResilience({administrator}:{administrator:boolean}){
               ['Week-to-date',w.wtd,'This calendar week so far (Monday 00:00 to now). Reads "insufficient" on Monday/Tuesday until enough of the week is observed.'],
               ['Previous week',w.prev_week,'The last complete calendar week (previous Monday to Sunday) — the figure used for weekly reporting.'],
               ['YTD',w.ytd,'January 1 to now, with each device’s pre-commissioning days trimmed. Coverage-gated at 90%.']].map(([l,win,ht]:any)=>
-              <div className="pr-tile" key={l}><div className="t-l">{l} <Help text={ht+' Shown as best-path (branch kept a path if its best-covered device was up); pooled = strict per-device average.'}/></div><div className="t-v">{win.status==='ok'?pct(win.best_path):'Insufficient'}</div><div className="t-s">best-path{win.pooled!=null?` · pooled ${pct(win.pooled)}`:''}</div></div>)}
+              <div className="pr-tile" key={l}><div className="t-l">{l} <Help text={ht+' Shown as best-path (branch kept a path if its best-covered device was up); pooled = strict per-device average.'}/></div><div className="t-v">{win.status==='ok'?pct(win.best_path):'Insufficient'}</div><div className="t-s">best-path{win.status==='ok'&&win.pooled!=null?` · pooled ${pct(win.pooled)}`:''}</div></div>)}
           </div>
           <div className="pr-chiprow">
             {chip(f.distribution_redundant?'ok':'warn',`Distribution ${f.distribution_redundant?'stacked':'single'}`)}

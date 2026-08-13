@@ -6,7 +6,7 @@ from openpyxl import Workbook
 os.environ.setdefault("DATABASE_URL","sqlite:///:memory:")
 os.environ.setdefault("LOCAL_ADMIN_PASSWORD","correct-horse-battery-staple")
 os.environ.setdefault("LOCAL_USER_PASSWORD","viewer-password-long")
-os.environ.setdefault("JWT_SECRET","test-secret-long-enough")
+os.environ.setdefault("JWT_SECRET","test-secret-long-enough-32-bytes")
 
 from fastapi.testclient import TestClient
 from app.inventory import physical_switch_count
