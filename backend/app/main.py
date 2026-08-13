@@ -262,6 +262,14 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
     ssh_meta = None
     if facts and facts.data:
         ssh_tables = facts.data.get("tables", {})
+        # Remediation procedures and CLI are operational admin material.  Keep them
+        # out of the response altogether for Network Users; hiding a tab in React
+        # would not meet the server-side role-separation invariant.
+        if user.get("role") != "Administrator":
+            ssh_tables = {name: rows for name, rows in ssh_tables.items() if name != "Recommendations (SSH)"}
+        elif ssh_tables.get("Recommendations (SSH)"):
+            ssh_tables = dict(ssh_tables)
+            ssh_tables["Recommendations (SSH)"] = ssh_collect.enrich_recommendations(ssh_tables["Recommendations (SSH)"])
         by_name = {t["name"]: t for t in tables}
         # Enrich interface rows (VLAN / duplex / speed / errors) by normalized interface name.
         if_status = ssh_tables.get("_if_status", {})

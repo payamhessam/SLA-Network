@@ -307,6 +307,66 @@ def _recommend(mnemonic: str, severity: int) -> tuple[str, str]:
         return "An error condition was logged.", "Review the message context and the affected component; remediate before it escalates."
     return "A notable event was logged.", "Monitor; act if it recurs or correlates with a service impact."
 
+
+# Administrator-only runbooks.  The app never runs these: they lead with evidence gathering,
+# require an approved change for any configuration action, and finish with verification.  A
+# generic runbook deliberately exists for every unmatched syslog mnemonic so no actionable
+# alert is reduced to an unexplained colour or severity number.
+_RUNBOOKS = {
+    "DUPLEX_MISMATCH": ("Compare both link ends; correct the mismatch in an approved change, then confirm counters stop increasing.", ["show interfaces <interface> status", "show interfaces <interface> | include Duplex|Speed|error"], "Cisco IOS XE interface troubleshooting"),
+    "NATIVE_VLAN_MISMATCH": ("Identify the two trunk endpoints; compare native and allowed VLANs, align them in an approved change, then verify STP and trunk state.", ["show interfaces trunk", "show interfaces <interface> switchport", "show spanning-tree interface <interface> detail"], "Cisco IOS XE VLAN and trunk configuration"),
+    "ERR_DISABLE": ("Identify the errdisable cause, fix that root cause, then recover the port only after the cause is removed.", ["show interfaces status err-disabled", "show errdisable recovery", "show logging | include ERR_DISABLE"], "Cisco: Recover Errdisable Port State on IOS Platforms"),
+    "ERRDISABLE": ("Identify the errdisable cause, fix that root cause, then recover the port only after the cause is removed.", ["show interfaces status err-disabled", "show errdisable recovery", "show logging | include ERRDISABLE"], "Cisco: Recover Errdisable Port State on IOS Platforms"),
+    "BPDUGUARD": ("Confirm the port is host-facing. Remove the attached bridge/switch or redesign the link as a network port; only then recover the interface.", ["show interfaces status err-disabled", "show spanning-tree interface <interface> detail", "show spanning-tree summary totals"], "Cisco: PortFast and BPDU Guard"),
+    "UDLD": ("Check both fibre strands, optics and patching for a unidirectional fault. Replace the defective component, then verify bidirectional operation before recovery.", ["show udld interface <interface>", "show interfaces <interface>", "show logging | include UDLD"], "Cisco IOS XE UDLD configuration"),
+    "LACP": ("Compare channel-group mode, member speed/duplex, trunk mode and allowed VLANs at both ends. Correct the mismatch in an approved change and verify members bundle.", ["show etherchannel summary", "show lacp neighbor detail", "show interfaces trunk"], "Cisco IOS XE 17 EtherChannel Configuration Guide"),
+    "CANNOT_BUNDLE": ("Compare all member settings on both ends; make only the intended bundle members identical, then verify they show bundled/in use.", ["show etherchannel summary", "show running-config interface <interface>", "show lacp neighbor detail"], "Cisco IOS XE 17 EtherChannel Configuration Guide"),
+    "PORT_SUSPENDED": ("Find the LACP/PAgP or member-parameter mismatch at both ends; correct it in an approved change, then verify the member returns to the bundle.", ["show etherchannel summary", "show lacp neighbor detail", "show interfaces status"], "Cisco IOS XE 17 EtherChannel Configuration Guide"),
+    "SFF8472": ("Record optical levels, clean and reseat both ends, confirm the optic type and distance are supported, then replace the optic/patch if levels remain out of range.", ["show interfaces transceiver detail", "show interfaces <interface>", "show logging | include SFF8472"], "Cisco IOS XE transceiver diagnostics"),
+    "TRANSCEIVER": ("Inspect the optic, fibre and peer port; validate compatibility and DOM levels before replacing components.", ["show interfaces transceiver detail", "show interfaces <interface>"], "Cisco IOS XE transceiver diagnostics"),
+    "MACFLAP": ("Locate both ports carrying the MAC; remove the loop or correct the intended EtherChannel/dual-home design, then verify MAC movement stops.", ["show mac address-table dynamic address <mac>", "show spanning-tree inconsistentports", "show logging | include MACFLAP"], "Cisco IOS XE Layer-2 troubleshooting"),
+    "STORM_CONTROL": ("Identify the traffic source and rule out an L2 loop before changing thresholds. Adjust storm control only with a justified traffic baseline.", ["show storm-control interface <interface>", "show interfaces counters errors", "show spanning-tree summary totals"], "Cisco IOS XE storm-control configuration"),
+    "SPANTREE": ("Determine whether the event is a legitimate topology change or a loop/guard action. Correct cabling or root/edge-port policy before clearing any block.", ["show spanning-tree summary", "show spanning-tree inconsistentports", "show logging | include SPANTREE"], "Cisco IOS XE spanning-tree troubleshooting"),
+    "HSRP": ("Correlate the state change with uplink and tracking state. Fix any underlying link flap or priority/tracking issue, then verify a stable active/standby pair.", ["show standby brief", "show standby <interface> <group>", "show track"], "Cisco IOS XE HSRP configuration"),
+    "VRRP": ("Correlate the state change with uplink and tracking state. Fix any underlying link flap or priority/tracking issue, then verify a stable master/backup pair.", ["show vrrp brief", "show track"], "Cisco IOS XE VRRP configuration"),
+    "PSECURE_VIOLATION": ("Identify the observed MAC and business owner. Remove an unauthorized endpoint or update the approved port-security policy, then verify no new violations.", ["show port-security interface <interface>", "show mac address-table interface <interface>", "show logging | include PSECURE"], "Cisco IOS XE port-security configuration"),
+    "DOT1X": ("Validate endpoint credentials, RADIUS/ISE reachability and the intended authentication policy before changing the port configuration.", ["show authentication sessions interface <interface> details", "show radius statistics", "show logging | include DOT1X"], "Cisco IOS XE 802.1X configuration"),
+}
+
+
+def _runbook(mnemonic: str, severity: int) -> tuple[str, list[str], str]:
+    up = (mnemonic or "").upper()
+    for key, runbook in _RUNBOOKS.items():
+        if key in up:
+            return runbook
+    urgency = "immediately" if severity <= 2 else "before it recurs or causes service impact"
+    return (f"Preserve the log context, identify the affected interface/component, and investigate {urgency}. Escalate to the network on-call engineer when impact is confirmed.",
+            [f"show logging | include {up or '<mnemonic>'}", "show interfaces status", "show platform software status control-processor brief"],
+            "Cisco IOS XE troubleshooting workflow")
+
+
+def enrich_recommendations(rows: list[dict]) -> list[dict]:
+    """Attach the current admin runbook to historical SSH recommendations at read time.
+
+    Existing saved facts predate the runbook columns.  Enriching a response preserves
+    their original alert evidence while giving administrators the same procedure without
+    requiring a new device collection or rewriting stored production data.
+    """
+    out = []
+    for row in rows or []:
+        item = dict(row)
+        if not item.get("Verification commands"):
+            finding = str(item.get("Finding") or "")
+            match = re.search(r"%([A-Z0-9_]+)-(\d)-([A-Z0-9_]+)", finding)
+            mnemonic = f"{match.group(1)} {match.group(3)}" if match else finding
+            sev = int(match.group(2)) if match else (3 if str(item.get("Priority")).upper() == "P2" else 4)
+            procedure, commands, reference = _runbook(mnemonic, sev)
+            item.setdefault("Procedure", procedure)
+            item["Verification commands"] = "\n".join(commands)
+            item.setdefault("Reference", reference)
+        out.append(item)
+    return out
+
 _INVALID = ("% invalid input", "% incomplete", "% ambiguous", "% unrecognized", "invalid input detected")
 
 # Redaction: never persist device credentials/keys pulled from a running-config. Each rule
@@ -543,7 +603,9 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
             entry = seen.get(key)
             if entry is None:
                 cause, action = _recommend(f"{fac} {mnem}", sev)  # match KB on facility + mnemonic
-                seen[key] = {"sev": sev, "count": 1, "fac": fac, "mnem": mnem, "cause": cause, "action": action, "sample": msg[:160]}
+                procedure, commands, reference = _runbook(f"{fac} {mnem}", sev)
+                seen[key] = {"sev": sev, "count": 1, "fac": fac, "mnem": mnem, "cause": cause, "action": action,
+                             "procedure": procedure, "commands": commands, "reference": reference, "sample": msg[:160]}
             else:
                 entry["count"] += 1
                 entry["sev"] = min(entry["sev"], sev)
@@ -553,7 +615,8 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
             pr = "P1" if e["sev"] <= 2 else ("P2" if e["sev"] == 3 else "P3")
             recs.append({"Priority": pr, "Severity": _SEV.get(e["sev"], str(e["sev"])),
                          "Finding": f"{e['count']}x %{e['fac']}-{e['sev']}-{e['mnem']}", "Likely cause": e["cause"],
-                         "Recommended action": e["action"], "Latest message": e["sample"]})
+                         "Recommended action": e["action"], "Procedure": e["procedure"],
+                         "Verification commands": "\n".join(e["commands"]), "Reference": e["reference"], "Latest message": e["sample"]})
     # Interface-error and environment findings feed the recommendation panel too.
     bad_ifs = [k for k, v in (if_status or {}).items()
                if str(v.get("FCS/CRC Errors") or "0").strip() not in ("0", "", "None") or str(v.get("Align Errors") or "0").strip() not in ("0", "", "None")]
@@ -561,7 +624,9 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
         recs.append({"Priority": "P2", "Severity": "Error", "Finding": f"{len(bad_ifs)} interface(s) with FCS/CRC or alignment errors",
                      "Likely cause": "Physical-layer problem (bad cable/SFP, duplex mismatch, or EMI).",
                      "Recommended action": f"Inspect {', '.join(bad_ifs[:6])}: reseat/replace the cable or transceiver and confirm duplex/speed autoneg.",
-                     "Latest message": ""})
+                     "Procedure": "Capture counters, compare both ends, correct the physical or configuration fault in an approved change, then confirm counters stop increasing.",
+                     "Verification commands": "show interfaces <interface>\nshow interfaces counters errors\nshow interfaces transceiver detail",
+                     "Reference": "Cisco IOS XE interface troubleshooting", "Latest message": ""})
     if alert_rows:
         tables["Alerts"] = alert_rows
     if recs:

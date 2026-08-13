@@ -189,3 +189,15 @@ def test_reported_hostname_falls_back_to_version_banner_when_no_config():
 def test_reported_hostname_none_when_neither_present():
     from app import ssh_collect
     assert ssh_collect._reported_hostname({}) is None
+
+
+def test_every_alert_has_an_evidence_first_admin_runbook():
+    from app import ssh_collect
+    procedure, commands, reference = ssh_collect._runbook("SPANTREE BPDUGUARD", 2)
+    assert "approved" in procedure.lower() or "confirm" in procedure.lower()
+    assert commands and all(command.startswith("show ") for command in commands)
+    assert "Cisco" in reference
+    generic_procedure, generic_commands, _ = ssh_collect._runbook("UNSEEN FACILITY", 3)
+    assert generic_procedure and generic_commands[0].startswith("show logging")
+    historical = ssh_collect.enrich_recommendations([{"Priority": "P1", "Finding": "2x %SPANTREE-2-BPDUGUARD"}])[0]
+    assert historical["Procedure"] and "show spanning-tree" in historical["Verification commands"]
