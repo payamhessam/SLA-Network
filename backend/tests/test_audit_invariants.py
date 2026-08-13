@@ -156,6 +156,18 @@ def test_interface_state_buckets_always_sum_to_total():
     assert (result["up"], result["down"], result["disabled"], result["unknown"]) == (1, 1, 1, 1)
 
 
+def test_vlan_membership_links_only_explicit_access_ports_and_svis():
+    from app.main import _vlan_membership_by_interface
+    linked = _vlan_membership_by_interface([
+        {"VLAN ID": "10", "Name": "Users", "Ports": "Gi1/0/1, GigabitEthernet1/0/2"},
+        {"VLAN ID": "20", "Name": "Voice", "Ports": "Gi1/0/3"},
+    ])
+    assert linked["gi1/0/1"] == "10 — Users"
+    assert linked["gi1/0/2"] == "10 — Users"
+    assert linked["vl10"] == "10 — Users"
+    assert "po1" not in linked  # no port description or trunk inference
+
+
 # ---- ssh_collect._reported_hostname must extract a device's OWN configured hostname from
 # either its running-config or its "show version" uptime banner, so device_detail() can catch
 # a stale LogicMonitor management-IP mapping (2026-08-12: LM's inventory pointed the

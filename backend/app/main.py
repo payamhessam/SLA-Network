@@ -187,6 +187,31 @@ def _ifkey(name):
     return s
 
 
+def _vlan_membership_by_interface(vlans: list[dict]) -> dict[str, str]:
+    """Build an evidence-only interface-to-VLAN lookup from ``show vlan brief``.
+
+    Cisco lists access-port membership in the VLAN table, while the interface-status
+    parser can legitimately omit its VLAN field.  This lookup fills that narrow gap;
+    it never assigns a VLAN to a trunk or guesses from a port description.
+    """
+    memberships: dict[str, set[str]] = {}
+    for vlan in vlans:
+        vlan_id = str(vlan.get("VLAN ID") or "").strip()
+        if not vlan_id:
+            continue
+        name = str(vlan.get("Name") or "").strip()
+        label = f"{vlan_id} — {name}" if name else vlan_id
+        for port in str(vlan.get("Ports") or "").split(","):
+            key = _ifkey(port)
+            if key:
+                memberships.setdefault(key, set()).add(label)
+        # An SVI is explicit evidence of its own VLAN, even though it is not an
+        # access port and therefore is not listed in the table's Ports column.
+        memberships.setdefault(_ifkey(f"Vlan{vlan_id}"), set()).add(label)
+    # Multiple VLANs for a port would be ambiguous (typically a trunk); withhold it.
+    return {key: next(iter(labels)) for key, labels in memberships.items() if len(labels) == 1}
+
+
 # SSH show-command output that is authoritative and should replace the LM display table even
 # when LM's own table is non-empty. "Inventory": LM cannot provide these columns at all (PID/
 # VID/serial). "CDP-LLDP Neighbors": LM's neighbor-discovery instances can go stale (observed
@@ -249,6 +274,17 @@ def device_detail(device_id: int, user=Depends(current_user), db: Session = Depe
                         cur = row.get(col)
                         if enr.get(col) and (cur is None or str(cur).strip() == "" or str(cur).lower().startswith("not ")):
                             row[col] = enr[col]
+        # ``show vlan brief`` is the authoritative membership table for access
+        # ports.  Use it only where its port list gives an unambiguous match;
+        # do not invent VLANs for trunks or from a port's free-text description.
+        vlan_memberships = _vlan_membership_by_interface(ssh_tables.get("VLANs", []))
+        if vlan_memberships and by_name.get("Interfaces", {}).get("rows"):
+            for row in by_name["Interfaces"]["rows"]:
+                current = row.get("VLAN")
+                if current is None or str(current).strip() == "" or str(current).lower().startswith("not "):
+                    linked = vlan_memberships.get(_ifkey(row.get("Interface")))
+                    if linked:
+                        row["VLAN"] = linked
         # Overlay empty LM tables, replace authoritative ones, and append SSH-only tables.
         for name, rows in ssh_tables.items():
             if name == "_if_status":
