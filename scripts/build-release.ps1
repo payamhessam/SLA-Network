@@ -21,7 +21,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-Set-Location $repo
+$projectRoot = Split-Path -Parent $repo
+$runtime = Join-Path $projectRoot 'docker'
+if (-not (Test-Path "$runtime\docker-compose.yml")) {
+    throw "Docker runtime not found at $runtime. Run releases only from the consolidated project layout."
+}
+Set-Location $runtime
 function Info($m){ Write-Host "[release] $m" -ForegroundColor Cyan }
 function Warn($m){ Write-Host "[release] $m" -ForegroundColor Yellow }
 
@@ -31,9 +36,9 @@ Info "Building images from the current source..."
 docker compose @compose build api frontend | Out-Null
 
 # Fail fast if the working tree is dirty - a release should be reproducible from a commit.
-$dirty = (git status --porcelain 2>$null)
+$dirty = (git -C $repo status --porcelain 2>$null)
 if ($dirty) { Warn "Working tree has uncommitted changes; this release will not match any commit." }
-$commit = (git rev-parse --short HEAD 2>$null)
+$commit = (git -C $repo rev-parse --short HEAD 2>$null)
 
 New-Item -ItemType Directory -Force "$Out\images" | Out-Null
 New-Item -ItemType Directory -Force "$Out\secrets" | Out-Null
