@@ -413,7 +413,7 @@ function SlaPage({role}:{role:string}){
     <section className="panel">
       <div className="panelhead"><div><h2>Network resilience estimate<Help text="Why the fleet lands at its tier: redundant uplinks, stack members, and dual power supplies per device combined with measured availability. Reassessed every 12 hours; administrators can trigger a fresh backfill and reassessment."/></h2><p className="muted">Recomputed every 12 hours{r.as_of?` · last run ${new Date(r.as_of).toLocaleString()}`:' · not run yet'}</p></div>{role==='Administrator'&&<button disabled={busy} onClick={backfill}>{busy?'Working…':'Run backfill + reassess'}</button>}</div>
       {msg&&<div className="form-message">{msg}</div>}
-      <ul className="validation-list">{(r.rationale||['Assessment pending.']).map((x:string,i:number)=><li key={i}>{x}</li>)}</ul>
+      <ul className="resilience-rationale">{(r.rationale||['Assessment pending.']).map((x:string,i:number)=><li key={i}>{x}</li>)}</ul>
     </section>
     <section className="panel">
       <div className="panelhead"><div><h2>Per-device SLA<Help text="WTD and YTD availability for each switch with its YTD coverage and estimated tier. Coverage-gated: cells show 'Insufficient evidence' below 90% coverage rather than a misleading number."/></h2><p className="muted">Coverage-gated; missing evidence is never shown as zero. Backfill start {data.backfill_start}.</p></div></div>
