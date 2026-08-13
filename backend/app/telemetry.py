@@ -106,19 +106,25 @@ def data_coverage(db: Session, fleet):
     ospf_n = sum(1 for d in fleet if _tables(d).get("OSPF Neighbors"))
     intf_n = sum(1 for d in fleet if _tables(d).get("Interfaces"))
     total = len(fleet)
+    def present(predicate):
+        count = sum(1 for d in fleet if predicate(d))
+        return ("Monitored" if count == total else "Partial", count)
+    availability = present(lambda d: bool((d["snap"].details or {}).get("ping")) if d.get("snap") and isinstance(d["snap"].details, dict) else False)
+    tables_present = lambda key: present(lambda d: bool(_tables(d).get(key)))
+    cpu = present(lambda d: bool(d.get("snap") and any(getattr(d["snap"], k, None) is not None for k in ("cpu", "memory", "temperature"))))
     rows = [
-        ("Availability / uptime", "Ping · HostStatus · SNMP_Host_Uptime", "Monitored", total),
-        ("Latency & packet loss", "Ping (rtt · PingLossPercent)", "Monitored", total),
+        ("Availability / uptime", "Ping · HostStatus · SNMP_Host_Uptime", availability[0], availability[1]),
+        ("Latency & packet loss", "Ping (rtt · PingLossPercent)", availability[0], availability[1]),
         ("Jitter", "CiscoSLA_ICMPJitter", "Not monitored", 0),
-        ("CPU / memory / temperature", "Cisco_CPU_SNMP · MemoryPools · Sensors", "Monitored", total),
-        ("Power / fans / stack", "PowerSupplies · CiscoFan · Switch Stack", "Monitored", total),
+        ("CPU / memory / temperature", "Cisco_CPU_SNMP · MemoryPools · Sensors", cpu[0], cpu[1]),
+        ("Power / fans / stack", "PowerSupplies · CiscoFan · Switch Stack", *tables_present("Environmental and PoE")),
         ("Interfaces (status/util/errors)", "SNMP_Network_Interfaces", "Monitored", intf_n),
         ("OSPF adjacency", "OSPF_Neighbors", "Partial" if ospf_n else "Not monitored", ospf_n),
         ("BGP peers / routes", "BGP-", "Not monitored", 0),
         ("EIGRP", "Cisco_EIGRP_*", "Not monitored", 0),
         ("Static / route-table counts", "(no datasource)", "Not available", 0),
-        ("Config backup", "LogicMonitor_ConfigSource_Metrics", "Monitored", total),
-        ("CDP/LLDP topology", "CDP_Neighbors · LLDP_Neighbors", "Monitored", total),
+        ("Config backup", "LogicMonitor_ConfigSource_Metrics", *tables_present("Configuration Backups")),
+        ("CDP/LLDP topology", "CDP_Neighbors · LLDP_Neighbors", *tables_present("CDP-LLDP Neighbors")),
     ]
     return {"fleet": total, "metrics": [{"metric": m, "source": s, "status": st, "devices": n} for (m, s, st, n) in rows]}
 

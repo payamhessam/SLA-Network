@@ -70,8 +70,8 @@ def _signals(uplinks, stack, dual_power, stack_known=True):
 def test_tier_banding():
     assert resilience.tier_of(_signals(1, 1, False), None)[0] == "Tier I"
     assert resilience.tier_of(_signals(1, 1, True), None)[0] == "Tier II"
-    assert resilience.tier_of(_signals(2, 2, True), 99.9)[0] == "Tier III"
-    assert resilience.tier_of(_signals(2, 2, True), 99.996)[0] == "Tier IV"
+    assert resilience.tier_of(_signals(2, 2, True), 99.9)[0] == "Tier II"
+    assert resilience.tier_of(_signals(2, 2, True), 99.996)[0] == "Tier II"
     assert resilience.tier_of(_signals(0, 1, False, stack_known=False), None)[0] == "Insufficient"
 
 

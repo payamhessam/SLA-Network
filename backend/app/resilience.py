@@ -76,15 +76,11 @@ def tier_of(signals: dict, availability_ytd: float | None) -> tuple[str, list[st
     reasons.append(f"{signals['power_supplies']} healthy power supply(ies)")
     if availability_ytd is not None:
         reasons.append(f"measured YTD availability {sla.fmt_pct(availability_ytd)}")
-    if two_paths and stack >= 2 and dual_power and availability_ytd is not None and availability_ytd >= 99.995:
-        tier = "Tier IV"
-        reasons.append("Dual paths + redundant supervisors + dual power + measured fault tolerance -> fault tolerant")
-    elif two_paths and n_plus_1:
-        tier = "Tier III"
-        reasons.append("Second independent path plus N+1 components -> concurrently maintainable")
-    elif n_plus_1:
+    # Neighbor names prove adjacency, not independent failure domains or a tested
+    # failover design. Do not award Tier III/IV/fault-tolerance claims from them.
+    if n_plus_1:
         tier = "Tier II"
-        reasons.append("N+1 components but a single distribution path")
+        reasons.append("Observed N+1 component evidence; independent end-to-end paths are not verified")
     elif uplinks >= 1 or signals["stack_known"]:
         tier = "Tier I"
         reasons.append("Single path with no component redundancy")
@@ -125,8 +121,8 @@ def assess_fleet(db: Session) -> dict:
         fleet_tier = weakest["tier"]
         rationale = [
             f"Fleet resilience is limited by its weakest critical node: {weakest['hostname']} ({weakest['tier']}).",
-            f"{sum(a['score'] >= 3 for a in evaluated)} of {len(evaluated)} switches meet Tier III-equivalent; "
-            f"{sum(a['score'] == 4 for a in evaluated)} reach Tier IV-equivalent.",
+            f"{sum(a['score'] >= 2 for a in evaluated)} of {len(evaluated)} switches show Tier II-equivalent component redundancy; "
+            "Tier III/IV claims require independently verified failure domains and are not inferred.",
             "Estimate reflects network-layer redundancy only, not a facility (power/cooling) certification.",
         ]
     else:
