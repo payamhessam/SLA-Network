@@ -285,7 +285,11 @@ def build(db: Session, site_code: str | None = None, include_commands: bool = Tr
         if not failover["has_routing_evidence"]:
             posture = ("East-west redundant; northbound needs SSH" if ew_redundant
                        else "Run Fill gaps on the DSW to assess")
-        elif ew_redundant and (failover["northbound_redundant"] or failover["wan_redundant"]):
+        # A mapped provider-router row is inventory evidence, not proof that the DSW
+        # has an installed, usable failover route. Reserve "Fully redundant" for
+        # observed northbound routing redundancy; otherwise surface the mapped circuits
+        # alongside the single-default warning.
+        elif ew_redundant and failover["northbound_redundant"]:
             posture = f"Fully redundant ({len(wan)} WAN circuits)" if wan else "Fully redundant"
         elif ew_redundant:
             posture = "Redundant east-west, single L3 default" + wan_note
