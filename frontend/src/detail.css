@@ -90,6 +90,7 @@
 .dv-alert-level.dv-crit{color:var(--dv-crit);background:var(--dv-crit-bg)}.dv-alert-level.dv-warn{color:var(--dv-warn);background:var(--dv-warn-bg)}.dv-alert-level.dv-neutral{color:var(--dv-on-variant);background:var(--dv-surface-high)}
 .dv-table tbody tr.dv-alert-row-crit td{background:color-mix(in srgb,var(--dv-crit-bg) 62%,transparent)}.dv-table tbody tr.dv-alert-row-warn td{background:color-mix(in srgb,var(--dv-warn-bg) 62%,transparent)}
 .dv-table tbody tr.dv-alert-row-crit:hover td,.dv-table tbody tr.dv-alert-row-warn:hover td{background:var(--dv-surface-high)}
+.dv-commands{margin:0;white-space:pre-wrap;font:11px/1.5 var(--dv-mono);color:var(--dv-on);min-width:260px}
 
 /* Empty state */
 .dv-empty{padding:48px 24px;text-align:center;color:var(--dv-on-variant)}
