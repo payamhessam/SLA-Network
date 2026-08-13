@@ -71,23 +71,23 @@ def _branch_windows(rows_by_device: dict[int, list], legacy_ids: list[int]) -> d
     for kind in WINDOWS:
         start, end = sla._window_bounds(kind, ref)
         per_device = []
+        branch_rows = []
         for did in legacy_ids:
             drows = [r for r in rows_by_device.get(did, []) if start <= r.day <= end]
+            branch_rows.extend(drows)
             per_device.append(sla._aggregate(drows))
         avails = [w["availability"] for w in per_device if w.get("availability") is not None]
-        # pooled = sum(up)/sum(observed) across the branch (current method)
-        up = sum(w.get("up_minutes", 0) for w in per_device)
-        obs = sum(w.get("observed_minutes", 0) for w in per_device)
-        # Do not publish a pooled percentage if no device met SLA evidence coverage.
-        # A raw up/observed division here could otherwise turn an insufficient branch
-        # into a reassuring-looking percentage while best_path correctly remains None.
-        pooled = round(100.0 * up / obs, 4) if avails and obs else None
+        # The branch itself must clear the same canonical 90% evidence gate as every
+        # other SLA surface. One well-observed member cannot legitimize a branch value
+        # when the pooled branch evidence is incomplete.
+        aggregate = sla._aggregate(branch_rows)
+        pooled = aggregate["availability"]
         # best-path proxy = the best-covered device kept a path
-        best = round(max(avails), 4) if avails else None
+        best = round(max(avails), 4) if aggregate["availability"] is not None and avails else None
         out[kind] = {
             "start": start.isoformat(), "end": end.isoformat(),
             "pooled": pooled, "best_path": best,
-            "status": "ok" if avails else "Insufficient evidence",
+            "status": "ok" if aggregate["availability"] is not None else "Insufficient evidence",
         }
     return out
 

@@ -17,22 +17,13 @@ KB: dict[str, dict] = {
                 "first-hop redundancy. If that upstream path or next-hop fails, the whole site is isolated "
                 "until routing is manually restored."),
         "recommendation": ("Add a second upstream path (a backup circuit or a link to a second core/WAN "
-                           "device) and install a floating static default route that is tracked by IP SLA, "
-                           "so it only takes over when the primary path actually fails."),
+                            "device) and have a network engineer design and validate the failover policy for "
+                            "the branch's routing protocol and WAN edge."),
         "commands": [
-            "! 1) Probe the PRIMARY next-hop so we know when it is really down",
-            "ip sla 1",
-            " icmp-echo <primary-next-hop-ip> source-interface <primary-uplink>",
-            " frequency 5",
-            "ip sla schedule 1 life forever start-time now",
-            "track 1 ip sla 1 reachability",
-            "! 2) Floating static default via the BACKUP next-hop (AD 250 > the OSPF/primary default),",
-            "!    installed only while track 1 is up",
-            "ip route 0.0.0.0 0.0.0.0 <backup-next-hop-ip> 250 track 1",
-            "! 3) Verify",
-            "show ip sla statistics",
-            "show track 1",
+            "! Verify the current primary path before designing a site-specific failover change",
             "show ip route 0.0.0.0",
+            "show ip sla statistics",
+            "show track",
         ],
         "reference": "Cisco CLI Master Cheatsheet §15.1–15.2 (Static Routing / Static Route Tracking)",
     },
@@ -77,19 +68,11 @@ KB: dict[str, dict] = {
                 "route (one next-hop, no floating backup, no FHRP). The backup path exists physically but "
                 "the switch will not fail over to it on its own — the redundancy is not actually usable at L3."),
         "recommendation": ("Install a floating static default via the backup circuit's next-hop, tracked by IP "
-                           "SLA against the primary, so the branch fails over to the second carrier automatically. "
-                           "Confirm the upstream/WAN edge actually re-advertises during a primary outage."),
+                            "SLA against the primary, so the branch fails over to the second carrier automatically. "
+                            "Confirm the upstream/WAN edge actually re-advertises during a primary outage. A qualified "
+                            "network engineer must select the correct track inversion and route policy for this topology."),
         "commands": [
-            "! Track the PRIMARY circuit next-hop",
-            "ip sla 1",
-            " icmp-echo <primary-next-hop-ip> source-interface <primary-uplink>",
-            " frequency 5",
-            "ip sla schedule 1 life forever start-time now",
-            "track 1 ip sla 1 reachability",
-            "! Floating default via the BACKUP circuit (installed only while primary is down)",
-            "ip route 0.0.0.0 0.0.0.0 <backup-circuit-next-hop> 250 track 1",
-            "! Verify failover behaviour",
-            "show track 1",
+            "! Verify the primary and backup paths before a site-specific routing change",
             "show ip route 0.0.0.0",
             "show ip sla statistics",
         ],

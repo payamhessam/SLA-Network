@@ -94,10 +94,13 @@ def _agg_metrics(rows, target):
     SLA-based payments (over 100% means the SLA was breached)."""
     a = sla._aggregate(rows)
     observed, up = a["observed_minutes"], a["up_minutes"]
-    down = max(0, observed - up)
-    allowed = observed * (1 - target / 100.0)
+    # Compliance-adjacent values are withheld with availability. A partial collection
+    # must never read as zero downtime or zero budget consumed.
+    sufficient = a["availability"] is not None
+    down = max(0, observed - up) if sufficient else None
+    allowed = observed * (1 - target / 100.0) if sufficient else None
     return {"availability": a["availability"], "coverage": a["coverage"], "observed": observed, "up": up,
-            "down": down, "budget_pct": (round(100.0 * down / allowed, 1) if allowed > 0 else None),
+            "down": down, "budget_pct": (round(100.0 * down / allowed, 1) if allowed and allowed > 0 else None),
             "first_observed": a.get("first_observed")}
 
 
@@ -121,9 +124,12 @@ def report_model(db: Session) -> dict:
         return _agg_metrics([r for did in dev_ids for r in by_dev.get(did, []) if s <= r.day <= e], target)
 
     inc = trends.incidents(db, fleet=fleet)
-    by_city = defaultdict(lambda: {"count": 0, "down": 0})
+    device_site = {d["device_id"]: d["site_code"] or d["city"] for d in fleet if d["device_id"]}
+    by_site = defaultdict(lambda: {"count": 0, "down": 0})
     for i in inc:
-        by_city[i["city"]]["count"] += 1; by_city[i["city"]]["down"] += i["down"]
+        site = device_site.get(i["device_id"])
+        if site:
+            by_site[site]["count"] += 1; by_site[site]["down"] += i["down"]
 
     # per-branch (site) scorecard
     site_groups = defaultdict(list)
@@ -133,12 +139,12 @@ def report_model(db: Session) -> dict:
     for members in site_groups.values():
         first = members[0]; did = [m["device_id"] for m in members if m["device_id"]]
         wtd, ytd = win(did, ws, we), win(did, ys, ye)
-        ci = by_city.get(first["city"], {"count": 0, "down": 0})
+        ci = by_site.get(first["site_code"] or first["city"], {"count": 0, "down": 0})
         branches.append({
             "site_code": first["site_code"], "city": first["city"], "province": first["province"], "unit": first["business_unit"],
             "devices": sum(m["physical"] for m in members), "wtd": wtd["availability"], "ytd": ytd["availability"], "target": target,
-            "met_wtd": wtd["availability"] is not None and wtd["availability"] >= target,
-            "met_ytd": ytd["availability"] is not None and ytd["availability"] >= target,
+            "met_wtd": (wtd["availability"] >= target) if wtd["availability"] is not None else None,
+            "met_ytd": (ytd["availability"] >= target) if ytd["availability"] is not None else None,
             "down_ytd_min": ytd["down"], "budget_pct": ytd["budget_pct"], "incidents": ci["count"],
             "mttr": (round(ci["down"] / ci["count"]) if ci["count"] else None), "since": _mlabel(ytd["first_observed"]),
         })
@@ -154,20 +160,25 @@ def report_model(db: Session) -> dict:
     for name, members in unit_groups.items():
         did = [m["device_id"] for m in members if m["device_id"]]
         wtd, ytd = win(did, ws, we), win(did, ys, ye)
-        cities = {m["city"] for m in members}
-        ui = sum(by_city.get(c, {"count": 0})["count"] for c in cities)
-        ud = sum(by_city.get(c, {"down": 0})["down"] for c in cities)
+        sites = {m["site_code"] or m["city"] for m in members}
+        ui = sum(by_site.get(s, {"count": 0})["count"] for s in sites)
+        ud = sum(by_site.get(s, {"down": 0})["down"] for s in sites)
         units.append({"name": name, "wtd": wtd["availability"], "ytd": ytd["availability"], "devices": sum(m["physical"] for m in members),
                       "sites": len({m["site_code"] or m["city"] for m in members}), "incidents": ui,
                       "mttr": (round(ud / ui) if ui else None), "budget_pct": ytd["budget_pct"],
-                      "met_ytd": ytd["availability"] is not None and ytd["availability"] >= target})
+                      "met_ytd": (ytd["availability"] >= target) if ytd["availability"] is not None else None})
     units.sort(key=lambda u: -u["devices"])
 
-    # incidents per month (last 6)
+    # Incidents per calendar month (last 6); zero months are real chart data, not gaps.
     per_month = defaultdict(lambda: {"count": 0, "down": 0})
     for i in inc:
         per_month[i["start"][:7]]["count"] += 1; per_month[i["start"][:7]]["down"] += i["down"]
-    months = sorted(per_month)[-6:]
+    months = []
+    for offset in range(5, -1, -1):
+        year, month = ref.year, ref.month - offset
+        while month <= 0:
+            year -= 1; month += 12
+        months.append(f"{year:04d}-{month:02d}")
     inc_month = [{"month": m, "count": per_month[m]["count"], "down": per_month[m]["down"]} for m in months]
 
     f_wtd, f_ytd = win(ids, ws, we), win(ids, ys, ye)
@@ -181,8 +192,9 @@ def report_model(db: Session) -> dict:
         "units": units, "branches": branches, "incidents_month": inc_month,
         "weekly": trends.availability_trend(db, fleet=fleet)["series"],
         "mttr_mtbf": trends.mttr_mtbf(db, inc=inc, fleet=fleet), "deltas": trends.deltas(db, fleet=fleet),
-        "branches_met": sum(1 for b in branches if b["met_ytd"]),
-        "branches_missed": sum(1 for b in branches if b["ytd"] is not None and not b["met_ytd"]),
+        "branches_met": sum(1 for b in branches if b["met_ytd"] is True),
+        "branches_missed": sum(1 for b in branches if b["met_ytd"] is False),
+        "branches_measured": sum(1 for b in branches if b["met_ytd"] is not None),
         "critical": (win(crit_ids, ys, ye) if crit_ids else None), "critical_devices": len(crit_ids),
     }
 
@@ -303,7 +315,7 @@ def _table(ws, headers, rows, row=4):
 
 
 def _met(v):
-    return "Yes" if v else "No"
+    return "Yes" if v is True else ("No" if v is False else "Insufficient")
 
 
 def _colored_table(ws, headers, rows, colorers, row=4):

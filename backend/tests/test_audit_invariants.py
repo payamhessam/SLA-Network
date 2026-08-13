@@ -112,6 +112,31 @@ def test_branch_windows_never_publish_pooled_availability_without_coverage():
     assert out[kind]["pooled"] is None
 
 
+def test_branch_windows_apply_coverage_gate_to_the_whole_branch():
+    """One well-observed member cannot publish an under-observed branch."""
+    from app import pathres
+    from app.sla import _window_bounds, today_local
+
+    d = today_local()
+    kind = next(k for k in pathres.WINDOWS if _window_bounds(k, d)[0] <= d <= _window_bounds(k, d)[1])
+    out = pathres._branch_windows({
+        1: [_day(1440, 1440, 1440, device_id=1, day=d)],
+        2: [_day(1440, 1, 1, device_id=2, day=d)],
+    }, [1, 2])
+    assert out[kind]["status"] == "Insufficient evidence"
+    assert out[kind]["pooled"] is None
+    assert out[kind]["best_path"] is None
+
+
+def test_report_metrics_withhold_downtime_and_budget_without_evidence():
+    from app import reports
+    metrics = reports._agg_metrics([_day(1440, 10, 10)], 99.9)
+    assert metrics["availability"] is None
+    assert metrics["down"] is None
+    assert metrics["budget_pct"] is None
+    assert reports._met(None) == "Insufficient"
+
+
 # ---- telemetry.interfaces() must partition every interface into exactly one of
 # up/down/disabled/unknown, so total never silently disagrees with their sum (2026-08-12 audit:
 # the fleet-wide Interface/Circuit Health tiles showed total=1633 but up+down=264, with the
