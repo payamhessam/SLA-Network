@@ -207,7 +207,7 @@ function abbrevPort(p:string|null){
 }
 function NeighborTopology({device,rows}:{device:Device,rows:any[]}){
   const theme=useTheme();const P=theme==='light'?TOPO_LIGHT:TOPO_DARK;
-  const parse=(r:any)=>{const li=String(r['Local Interface']||'');const m=li.match(/ on (\S+)(?: via (\S+))?/i);return{name:String(r['Neighbor']||li||'Unknown'),protocol:String(r['Protocol']||'').toUpperCase(),local:m?m[1]:null,remote:m&&m[2]?m[2]:null}};
+  const parse=(r:any)=>{const li=String(r['Local Interface']||'').trim();const m=li.match(/ on (\S+)(?: via (\S+))?/i);const remote=String(r['Remote Port']||'').trim();return{name:String(r['Neighbor']||li||'Unknown'),protocol:String(r['Protocol']||'').toUpperCase(),local:m?m[1]:(li||null),remote:remote||(m&&m[2]?m[2]:null)}};
   const nb=rows.map(parse);
   const groups=new Map<string,{name:string,links:any[]}>();
   nb.forEach(n=>{const k=n.name.toLowerCase();const g=groups.get(k)||{name:n.name,links:[]};g.links.push(n);groups.set(k,g)});
