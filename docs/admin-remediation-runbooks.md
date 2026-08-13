@@ -35,6 +35,88 @@ and finish by proving that the original symptom has stopped.
 | 802.1X / MAB / port security | `show authentication sessions interface <interface> details`, `show port-security interface <interface>`, `show radius statistics` | Identify endpoint ownership and policy first. Adjust identity/policy only when the endpoint is legitimate. | Authentication is authorized and no new violation is logged. |
 | OSPF below FULL | `show ip ospf neighbor`, `show ip ospf interface <interface>`, `show interfaces <interface> | include MTU` | EXSTART/EXCHANGE warrants MTU/authentication/network-type comparison on both ends. `ip ospf mtu-ignore` is an explicit exception, not a default fix. | The adjacency reaches FULL (or valid 2-WAY on a multiaccess segment) and routes install. |
 
+## Change-template library
+
+These original templates are deliberately parameterised. They are planning aids for an approved
+maintenance record, not runnable automation. Replace every angle-bracket value only after
+collecting the device's model, release, current configuration, peer configuration, impact,
+rollback command and validation owner. Capture `show` output before and after; never paste a
+template into a live device without peer review.
+
+### Host-facing BPDU Guard
+
+Use only when the evidence proves an access port connects to an endpoint, not another switch,
+hypervisor bridge, phone switch, or trunk.
+
+```ios
+interface <edge-interface>
+ switchport mode access
+ switchport access vlan <approved-access-vlan>
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+```
+
+Verify with `show spanning-tree interface <edge-interface> detail` and `show logging`. If the
+port received a BPDU, remove or redesign the attached bridge before recovering it. The
+configuration pattern and PortFast scope are documented by [Cisco](https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/10586-65.html) and illustrated by [Firewall.cx](https://www.firewall.cx/cisco/cisco-switches/spanning-tree-protocol-bpdu-guard-deployment-configuration.html).
+
+### LACP EtherChannel mismatch
+
+First compare both ends' speed, duplex, mode, native VLAN and allowed VLANs. Build the logical
+port and policy first; join one approved physical member at a time so rollback is explicit.
+
+```ios
+interface port-channel <id>
+ switchport mode trunk
+ switchport trunk native vlan <approved-native-vlan>
+ switchport trunk allowed vlan <approved-vlan-list>
+!
+interface <member-interface>
+ channel-group <id> mode active
+```
+
+Validate `show etherchannel summary`, `show lacp neighbor detail`, and `show interfaces
+port-channel <id>`. Cisco notes that LACP members must be compatible in settings such as speed,
+duplex, native VLAN and trunking; its [current EtherChannel guide](https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/lyr2-fwd/etherchannel/etherchannel-configuration-guide/etherchannels.html) is authoritative. [Firewall.cx's example](https://www.firewall.cx/operating-systems/microsoft/windows-servers/windows-server-nic-teaming-load-balancing-failover-lacp.html) is a useful topology illustration, but not a substitute for the platform guide.
+
+### Tracked primary route with a floating backup
+
+This is appropriate only after proving distinct circuits and routing domains. Probe an address
+beyond the primary next hop. The tracked route is the primary; the backup has a higher
+administrative distance. Do not put a positive-reachability track on the backup route if the
+intent is to use that backup when the primary fails.
+
+```ios
+ip sla <operation>
+ icmp-echo <stable-probe-target> source-interface <primary-wan-interface>
+ frequency <seconds>
+ip sla schedule <operation> life forever start-time now
+track <track-id> ip sla <operation> reachability
+ delay up <seconds> down <seconds>
+ip route 0.0.0.0 0.0.0.0 <primary-next-hop> track <track-id>
+ip route 0.0.0.0 0.0.0.0 <backup-next-hop> <higher-administrative-distance>
+```
+
+Prove normal and controlled-failure behaviour with `show ip sla statistics`, `show track
+<track-id>`, and `show ip route 0.0.0.0`. Cisco's [object tracking guide](https://www.cisco.com/c/en/us/td/docs/routers/ios/config/17-x/ip-addressing/b-ip-addressing/m_iap-eot-xe.html) documents reachability tracking and delays; [Firewall.cx's IP SLA walkthrough](https://www.firewall.cx/cisco/cisco-routers/cisco-router-pbr-ipsla-auto-redirect.html) provides a readable scenario example.
+
+### HSRP restoration after an uplink or tracking fault
+
+Use a preempt delay only after confirming that routing and upstream reachability converge
+before the restored device can become active. HSRP gives first-hop gateway redundancy; it is
+not evidence of a second WAN path.
+
+```ios
+interface <gateway-svi>
+ standby <group> priority <approved-priority>
+ standby <group> preempt delay minimum <seconds>
+ standby <group> track <uplink-or-track-id> decrement <approved-decrement>
+```
+
+Verify stable state, priority and tracking with `show standby brief`, `show standby
+<interface> <group>`, `show track`, and `show ip route 0.0.0.0`. Confirm supported syntax in the
+[Cisco HSRP guide](https://www.cisco.com/c/en/us/td/docs/routers/ios-xe/network-services/network-services/m_fhp-hsrp-0.html) for the installed release.
+
 ## Cisco primary references used
 
 - [EtherChannel Configuration Guide, Cisco IOS XE 17](https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/lyr2-fwd/etherchannel/etherchannel-configuration-guide/etherchannels.html)
@@ -44,6 +126,9 @@ and finish by proving that the original symptom has stopped.
 - [Enhanced Object Tracking, Cisco IOS XE](https://www.cisco.com/c/en/us/td/docs/routers/ios/config/17-x/ip-addressing/b-ip-addressing/m_iap-eot-xe.html)
 - [Dynamic ARP Inspection, Cisco IOS XE 17](https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/sec-crypto/fhs-sisf/fhs-and-sisf-configuration-guide/dynamic-arp-inspection.html)
 - [UDLD, Cisco IOS XE 17](https://www.cisco.com/c/en/us/td/docs/switches/lan/c9000/lyr2-fwd/cdp-lldp-mac-udld/cdp-lldp-mac-udld-configuration-guide/c-configure-udld.html)
+- [BPDU Guard and errdisable example, Firewall.cx](https://www.firewall.cx/cisco/cisco-switches/spanning-tree-protocol-bpdu-guard-deployment-configuration.html)
+- [IP SLA tracking scenario, Firewall.cx](https://www.firewall.cx/cisco/cisco-routers/cisco-router-pbr-ipsla-auto-redirect.html)
+- [LACP EtherChannel scenario, Firewall.cx](https://www.firewall.cx/operating-systems/microsoft/windows-servers/windows-server-nic-teaming-load-balancing-failover-lacp.html)
 
 The Cisco documents are the authoritative command references. The runbooks are original,
 environment-specific operational summaries; command availability must be checked against the

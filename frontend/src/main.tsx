@@ -297,7 +297,7 @@ function DeviceDetail({device,back,administrator}:{device:Device,back:()=>void,a
   const cell=(col:string,value:any)=>{
     if(col==='Status'&&value!=null&&value!=='')return <span className={'dv-status dv-'+statusClass(value)}><span className="dv-dot"/>{String(value)}</span>;
     if((col==='Severity'||col==='Priority')&&value!=null&&value!=='')return <span className={'dv-alert-level dv-'+alertClass(value)}>{String(value)}</span>;
-    if(col==='Verification commands'&&value)return <pre className="dv-commands">{String(value)}</pre>;
+    if((col==='Verification commands'||col==='Change template')&&value)return <pre className="dv-commands">{String(value)}</pre>;
     const shown=value??'Not available from LogicMonitor';
     return <span className={missingText(shown)?'dv-missing':undefined}>{String(shown)}</span>;
   };

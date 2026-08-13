@@ -334,15 +334,44 @@ _RUNBOOKS = {
 }
 
 
-def _runbook(mnemonic: str, severity: int) -> tuple[str, list[str], str]:
+# These are deliberately incomplete change templates, not commands to paste into production.
+# Values in angle brackets must come from the approved design and the device's running
+# configuration.  Keeping templates here makes the admin response useful while preserving
+# the collector's read-only contract.
+_CHANGE_TEMPLATES = {
+    "BPDUGUARD": "After confirming this is an edge/host port only:\ninterface <edge-interface>\n spanning-tree portfast\n spanning-tree bpduguard enable\n! Do not apply to a switch, trunk, or routed uplink. Recover only after the cause is removed.",
+    "ERR_DISABLE": "No generic configuration change. First identify the errdisable cause; correct that cause, then use the platform-approved recovery procedure in the maintenance record. Do not enable automatic recovery merely to hide a recurring trigger.",
+    "ERRDISABLE": "No generic configuration change. First identify the errdisable cause; correct that cause, then use the platform-approved recovery procedure in the maintenance record. Do not enable automatic recovery merely to hide a recurring trigger.",
+    "LACP": "After both ends, VLAN policy, speed/duplex and maintenance impact are approved:\ninterface port-channel <id>\n switchport mode trunk\n switchport trunk native vlan <native-vlan>\ninterface <member-interface>\n channel-group <id> mode active\n! Apply equivalent policy at the peer; do not mix incompatible members.",
+    "CANNOT_BUNDLE": "Do not force a member into a bundle. Compare the member with Port-channel <id> and the peer, then correct only the differing parameter (mode, speed, duplex, trunk/native/allowed VLAN) in the approved change.",
+    "PORT_SUSPENDED": "Do not force a suspended LACP member up. Compare both ends and correct the documented mismatch before returning the member to channel-group <id> mode active.",
+    "HSRP": "Example only after validating the active gateway, group and failure domain:\ninterface <gateway-svi>\n standby <group> priority <approved-priority>\n standby <group> preempt delay minimum <seconds>\n standby <group> track <uplink-or-track-id> decrement <value>\n! Validate platform syntax and avoid preemption before routing converges.",
+    "VRRP": "Example only after validating the master, group and failure domain:\ninterface <gateway-svi>\n vrrp <group> priority <approved-priority>\n vrrp <group> preempt delay minimum <seconds>\n! Validate platform syntax and avoid preemption before routing converges.",
+    "NATIVE_VLAN_MISMATCH": "After comparing both endpoints:\ninterface <trunk-interface>\n switchport trunk native vlan <approved-native-vlan>\n switchport trunk allowed vlan <approved-list>\n! The peer must match; never derive VLAN policy from an interface description.",
+    "UDLD": "No blind template: repair or replace the suspect fibre/optic/patch path first. Only then apply the approved platform-specific UDLD policy and verify both directions; a one-way link must not be treated as healthy.",
+    "SPANTREE": "Determine the intended role first. For a confirmed host-only edge port, use PortFast/BPDU Guard; for an inter-switch link, retain normal STP and correct the topology/root-policy fault instead.",
+    "PSECURE_VIOLATION": "Do not add an observed MAC as an exception until endpoint ownership is verified. Update the approved access policy or remove the unauthorized endpoint; preserve the original violation evidence.",
+    "DOT1X": "Do not bypass authentication to clear an alert. Validate endpoint identity and RADIUS/ISE reachability, then make the least-privilege policy correction approved by the access-control owner.",
+}
+
+
+def _change_template(mnemonic: str) -> str:
+    up = (mnemonic or "").upper()
+    for key, template in _CHANGE_TEMPLATES.items():
+        if key in up:
+            return template
+    return "No generic configuration template is safe for this event. Preserve the evidence, identify the exact platform and affected component, then use the vendor command reference in an approved change with a rollback plan."
+
+
+def _runbook(mnemonic: str, severity: int) -> tuple[str, list[str], str, str]:
     up = (mnemonic or "").upper()
     for key, runbook in _RUNBOOKS.items():
         if key in up:
-            return runbook
+            return (*runbook[:2], _change_template(mnemonic), runbook[2])
     urgency = "immediately" if severity <= 2 else "before it recurs or causes service impact"
     return (f"Preserve the log context, identify the affected interface/component, and investigate {urgency}. Escalate to the network on-call engineer when impact is confirmed.",
             [f"show logging | include {up or '<mnemonic>'}", "show interfaces status", "show platform software status control-processor brief"],
-            "Cisco IOS XE troubleshooting workflow")
+            _change_template(mnemonic), "Cisco IOS XE troubleshooting workflow")
 
 
 def enrich_recommendations(rows: list[dict]) -> list[dict]:
@@ -355,14 +384,15 @@ def enrich_recommendations(rows: list[dict]) -> list[dict]:
     out = []
     for row in rows or []:
         item = dict(row)
-        if not item.get("Verification commands"):
+        if not item.get("Verification commands") or not item.get("Change template"):
             finding = str(item.get("Finding") or "")
             match = re.search(r"%([A-Z0-9_]+)-(\d)-([A-Z0-9_]+)", finding)
             mnemonic = f"{match.group(1)} {match.group(3)}" if match else finding
             sev = int(match.group(2)) if match else (3 if str(item.get("Priority")).upper() == "P2" else 4)
-            procedure, commands, reference = _runbook(mnemonic, sev)
+            procedure, commands, template, reference = _runbook(mnemonic, sev)
             item.setdefault("Procedure", procedure)
-            item["Verification commands"] = "\n".join(commands)
+            item.setdefault("Verification commands", "\n".join(commands))
+            item.setdefault("Change template", template)
             item.setdefault("Reference", reference)
         out.append(item)
     return out
@@ -603,9 +633,9 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
             entry = seen.get(key)
             if entry is None:
                 cause, action = _recommend(f"{fac} {mnem}", sev)  # match KB on facility + mnemonic
-                procedure, commands, reference = _runbook(f"{fac} {mnem}", sev)
+                procedure, commands, template, reference = _runbook(f"{fac} {mnem}", sev)
                 seen[key] = {"sev": sev, "count": 1, "fac": fac, "mnem": mnem, "cause": cause, "action": action,
-                             "procedure": procedure, "commands": commands, "reference": reference, "sample": msg[:160]}
+                             "procedure": procedure, "commands": commands, "template": template, "reference": reference, "sample": msg[:160]}
             else:
                 entry["count"] += 1
                 entry["sev"] = min(entry["sev"], sev)
@@ -615,7 +645,7 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
             pr = "P1" if e["sev"] <= 2 else ("P2" if e["sev"] == 3 else "P3")
             recs.append({"Priority": pr, "Severity": _SEV.get(e["sev"], str(e["sev"])),
                          "Finding": f"{e['count']}x %{e['fac']}-{e['sev']}-{e['mnem']}", "Likely cause": e["cause"],
-                         "Recommended action": e["action"], "Procedure": e["procedure"],
+                         "Recommended action": e["action"], "Procedure": e["procedure"], "Change template": e["template"],
                          "Verification commands": "\n".join(e["commands"]), "Reference": e["reference"], "Latest message": e["sample"]})
     # Interface-error and environment findings feed the recommendation panel too.
     bad_ifs = [k for k, v in (if_status or {}).items()
@@ -626,6 +656,7 @@ def _map_tables(raw: dict, parsed: dict) -> dict:
                      "Recommended action": f"Inspect {', '.join(bad_ifs[:6])}: reseat/replace the cable or transceiver and confirm duplex/speed autoneg.",
                      "Procedure": "Capture counters, compare both ends, correct the physical or configuration fault in an approved change, then confirm counters stop increasing.",
                      "Verification commands": "show interfaces <interface>\nshow interfaces counters errors\nshow interfaces transceiver detail",
+                     "Change template": "No generic configuration template is safe for a physical-layer error. Preserve the counter baseline; repair/replace the proven cable, optic, patch or peer setting, then re-measure.",
                      "Reference": "Cisco IOS XE interface troubleshooting", "Latest message": ""})
     if alert_rows:
         tables["Alerts"] = alert_rows
