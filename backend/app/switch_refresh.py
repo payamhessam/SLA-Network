@@ -26,6 +26,7 @@ from .logicmonitor import LogicMonitorClient
 
 logger = logging.getLogger(__name__)
 _device_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+_fleet_refresh_lock = asyncio.Lock()
 
 
 def _lock_for(inventory_id: int) -> asyncio.Lock:
@@ -131,10 +132,14 @@ def schedule_refresh(inventory_id: int, actor: str) -> bool:
     return True
 
 
-async def refresh_all_switches() -> dict:
+async def refresh_all_switches(actor: str = "background-collector") -> dict:
     """Refresh every enabled, LogicMonitor-mapped device in Device Fleet (all types:
     DSW, ASW, RTR, DAS, INR, ...), every 30 minutes in the background."""
-    with SessionLocal() as db:
+    # A watchdog and the normal timer can both notice a stale cycle.  One fleet lock prevents
+    # them from multiplying read-only LogicMonitor requests while retaining per-device locks
+    # for detail refreshes.
+    async with _fleet_refresh_lock:
+      with SessionLocal() as db:
         rows = db.scalars(
             select(InventoryDevice)
             .join(InventoryDeviceType)
@@ -152,7 +157,7 @@ async def refresh_all_switches() -> dict:
                 # device, not the whole fleet sweep. A user opening a different device's
                 # detail page is never queued behind this loop.
                 async with _lock_for(row.id):
-                    await refresh_switch(db, row, "background-collector")
+                    await refresh_switch(db, row, actor)
                 db.commit()
                 collected += 1
             except Exception as exc:
@@ -160,6 +165,43 @@ async def refresh_all_switches() -> dict:
                 failures += 1
                 logger.warning("Background switch refresh failed for inventory id %s (%s)", row.id, type(exc).__name__)
         return {"requested": len(rows), "collected": collected, "failures": failures}
+
+
+async def _oldest_snapshot_age_minutes() -> float | None:
+    """Age of the oldest latest snapshot for an active, mapped device.
+
+    None means there is no current snapshot set at all, which the watchdog treats as stale.
+    This is a local DB-only check; it does not spend LogicMonitor API budget by itself.
+    """
+    with SessionLocal() as db:
+        ids = db.scalars(select(Device.id).where(Device.active.is_(True), Device.lm_device_id.is_not(None))).all()
+        if not ids:
+            return 0.0
+        latest = db.scalar(select(func.min(Snapshot.collected_at)).where(
+            Snapshot.device_id.in_(ids),
+            Snapshot.collected_at.in_(select(func.max(Snapshot.collected_at)).where(Snapshot.device_id.in_(ids)).group_by(Snapshot.device_id)),
+        ))
+        if not latest:
+            return None
+        return max(0.0, (datetime.now(timezone.utc) - latest).total_seconds() / 60)
+
+
+async def switch_freshness_watchdog_loop() -> None:
+    """Recover a stalled collector before a snapshot can be older than one hour."""
+    while True:
+        try:
+            age = await _oldest_snapshot_age_minutes()
+            # A normal sweep currently finishes within ~20 minutes. Start recovery at 40
+            # minutes, leaving the sweep time before the published one-hour freshness limit.
+            if (age is None or age > 40) and not _fleet_refresh_lock.locked():
+                logger.warning("Snapshot freshness backstop starting refresh (age=%s min)", None if age is None else round(age, 1))
+                result = await refresh_all_switches("freshness-watchdog")
+                logger.info("Snapshot freshness backstop completed: %s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Snapshot freshness backstop failed (%s)", type(exc).__name__)
+        await asyncio.sleep(300)
 
 
 async def switch_refresh_loop() -> None:

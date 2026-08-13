@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
@@ -38,6 +39,13 @@ def test_criticality_bands_and_counts():
 def test_throughput_is_not_fabricated():
     t = overview.throughput(None, [])
     assert t["available"] is False and t["value"] is None
+
+
+def test_throughput_withholds_stale_snapshot():
+    snap = SimpleNamespace(collected_at=datetime.now(timezone.utc) - timedelta(minutes=61), details={"tables": {"Interfaces": [{"Status": "up", "Speed": 1_000_000_000, "In Utilization %": 2, "Out Utilization %": 1}]}})
+    t = overview.throughput(None, [_dev(snap=snap)])
+    assert t["available"] is False and t["value"] is None
+    assert t["freshness_limit_minutes"] == 60
 
 
 def test_device_problem_severity():

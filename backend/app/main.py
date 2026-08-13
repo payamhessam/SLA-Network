@@ -30,7 +30,7 @@ from .inventory import router as inventory_router, seed_inventory
 from .access_points import router as access_point_router, ap_status_loop
 from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
-from .switch_refresh import switch_refresh_loop
+from .switch_refresh import switch_refresh_loop, switch_freshness_watchdog_loop
 from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
 from . import overview, pathres, reports, resilience, sla, ssh_collect, telemetry, trends
 
@@ -66,6 +66,7 @@ async def startup():
             conn.execute(text("ALTER TABLE wan_routers ADD COLUMN IF NOT EXISTS province varchar(80) DEFAULT ''"))
     with SessionLocal() as db: seed_inventory(db)
     app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
+    app.state.switch_freshness_watchdog_task = asyncio.create_task(switch_freshness_watchdog_loop())
     app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
     app.state.resilience_task = asyncio.create_task(resilience.resilience_loop())
     app.state.ap_status_task = asyncio.create_task(ap_status_loop())
@@ -80,7 +81,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    for name in ("switch_refresh_task", "sla_rollup_task", "resilience_task", "ap_status_task", "wan_refresh_task", "wan_bootstrap_task", "sla_backfill_task"):
+    for name in ("switch_refresh_task", "switch_freshness_watchdog_task", "sla_rollup_task", "resilience_task", "ap_status_task", "wan_refresh_task", "wan_bootstrap_task", "sla_backfill_task"):
         task = getattr(app.state, name, None)
         if task:
             task.cancel()
