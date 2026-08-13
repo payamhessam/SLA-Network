@@ -625,6 +625,6 @@ export const FAQ: { q: string; a: string; link?: string }[] = [
   { q: "What does 'Not monitored' mean?", a: "LogicMonitor has no data for that metric on this fleet (e.g. BGP, jitter). The app says so instead of showing a fake zero.", link: "data-coverage" },
   { q: "What is a good latency?", a: "On a LAN, single-digit milliseconds. Tens of milliseconds is fine for most WAN links. Sustained high values need investigation.", link: "latency" },
   { q: "Why can an interface be up but unhealthy?", a: "It can be up but running at high utilisation, dropping packets, or showing errors. Check its utilisation and error columns.", link: "interfaces-table" },
-  { q: "How often is data refreshed?", a: "Devices are re-collected every 30 minutes. Snapshot Utilisation is refreshed in the page every minute and is withheld if its oldest contributing device poll exceeds one hour. The SLA rollup runs every 6 hours, resilience every 12 hours, and access-point status every 2 hours.", link: "data-sources" },
+  { q: "How often is data refreshed?", a: "Devices are re-collected every 30 minutes. Snapshot Utilisation is refreshed in the page every 10 minutes and is withheld if its oldest contributing device poll exceeds one hour. The SLA rollup runs every 6 hours, resilience every 12 hours, and access-point status every 2 hours.", link: "data-sources" },
   { q: "Are the WAN provider routers part of our SLA?", a: "No. They belong to the carriers and are shown for visibility only, completely separate from Medline's metrics.", link: "wan-providers" },
 ];
