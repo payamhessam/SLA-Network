@@ -6,7 +6,8 @@ page (list + executive summary + device detail with routing: BGP / OSPF / EIGRP 
 IP-routing stats / interfaces / neighbours). It is deliberately self-contained:
 
   * it reads/writes ONLY the `wan_routers` table — never Device / InventoryDevice;
-  * nothing here feeds the Fleet SLA, Overview, resilience, trends or reports;
+  * nothing here feeds the Fleet SLA, Overview, resilience or trends; provider links
+    have their own separate, evidence-gated monthly service-level report;
   * only administrators may add, remove, or refresh a router;
   * missing telemetry is reported as "Not monitored" — never fabricated.
 """
@@ -14,7 +15,7 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -24,7 +25,7 @@ from sqlalchemy.orm import Session
 from .auth import administrator, current_user
 from .collection import OSPF_STATE, latest, numeric, state
 from .config import get_settings
-from .db import AuditEvent, WanRouter, SessionLocal, session
+from .db import AuditEvent, WanObservation, WanRouter, SessionLocal, session
 from .logicmonitor import LogicMonitorClient
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,7 @@ async def _refresh_one(db: Session, row: WanRouter, actor: str) -> None:
     row.status = snap["status"]; row.cpu = snap["cpu"]; row.memory = snap["memory"]
     row.temperature = snap["temperature"]; row.uptime = snap["uptime"]; row.reachability = snap["reachability"]
     row.details = snap["details"]; row.match_status = "Matched"; row.last_sync = datetime.now(timezone.utc)
+    db.add(WanObservation(wan_router_id=row.id, collected_at=row.last_sync, status=row.status, reachability=row.reachability))
     if not row.provider:
         row.site_label, row.provider = _split_name(row.display_name)
 
@@ -289,6 +291,117 @@ def _row_json(r: WanRouter) -> dict:
             "ospf_full": c.get("ospf_full"), "interfaces_up": c.get("interfaces_up"), "interfaces": c.get("interfaces")}
 
 
+def _monthly_link_sla(
+    observations,
+    period_start: datetime,
+    now: datetime,
+    interval_minutes: int,
+    monitoring_started_before_period: bool = False,
+) -> dict:
+    """Calculate availability only from observed time; gaps lower evidence, not availability.
+
+    A sample represents at most one normal collection interval.  A silent collector is
+    therefore never stretched across a gap and cannot manufacture a passing SLA result.
+    """
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    # SQLite returns a timezone-naive datetime even when the model is declared as
+    # timezone-aware.  Treat database timestamps as UTC consistently, which also
+    # makes this calculation behave the same in local tests and PostgreSQL.
+    ordered = sorted(
+        ((o, o.collected_at if o.collected_at.tzinfo else o.collected_at.replace(tzinfo=timezone.utc)) for o in observations),
+        key=lambda pair: pair[1],
+    )
+    ordered = [pair for pair in ordered if pair[1] <= now]
+    if not ordered:
+        return {"availability": None, "coverage": 0.0, "observed_minutes": 0, "expected_minutes": 0, "status": "Insufficient evidence"}
+    # A link already under observation at the start of the month is accountable for
+    # the whole month.  A newly added link starts its evidence window at its first
+    # successful collection, rather than being penalised for days before it existed.
+    expected_from = period_start if monitoring_started_before_period else max(period_start, ordered[0][1])
+    expected = max(0.0, (now - expected_from).total_seconds() / 60)
+    observed = up = 0.0
+    interval = timedelta(minutes=interval_minutes)
+    for index, (item, collected_at) in enumerate(ordered):
+        next_at = ordered[index + 1][1] if index + 1 < len(ordered) else now
+        start = max(collected_at, period_start)
+        end = min(next_at, collected_at + interval, now)
+        minutes = max(0.0, (end - start).total_seconds() / 60)
+        if minutes <= 0 or item.status == "Unknown":
+            continue
+        observed += minutes
+        if item.status in ("Healthy", "Warning"):
+            up += minutes
+    coverage = min(100.0, 100.0 * observed / expected) if expected else 0.0
+    availability = 100.0 * up / observed if observed else None
+    sufficient = availability is not None and coverage >= get_settings().coverage_threshold
+    return {
+        "availability": round(availability, 4) if sufficient else None,
+        "coverage": round(coverage, 2),
+        "observed_minutes": round(observed),
+        "expected_minutes": round(expected),
+        "status": "ok" if sufficient else "Insufficient evidence",
+    }
+
+
+def _current_link_state(router: WanRouter, now: datetime) -> str:
+    if not router.last_sync:
+        return "Unknown"
+    last_sync = router.last_sync if router.last_sync.tzinfo else router.last_sync.replace(tzinfo=timezone.utc)
+    freshness = max(60, get_settings().switch_collection_interval_minutes * 2)
+    if (now - last_sync).total_seconds() > freshness * 60:
+        return "Unknown"
+    return router.status or "Unknown"
+
+
+def _site_service_state(links: list[dict]) -> tuple[str, str]:
+    states = [link["current_state"] for link in links]
+    usable = sum(state in ("Healthy", "Warning") for state in states)
+    unavailable = sum(state == "Critical" for state in states)
+    if usable and unavailable:
+        return "Serious alert", "A provider link is unavailable, but another path is still carrying service."
+    if links and unavailable == len(links):
+        return "Full outage", "Every observed provider link for this site is unavailable."
+    if not usable:
+        return "Insufficient evidence", "Current provider-link state cannot be confirmed."
+    return "Healthy", "All observed provider links are currently available."
+
+
+def provider_service_level(db: Session, now: datetime | None = None) -> dict:
+    """Monthly, coverage-gated SLA for provider links plus the business-facing site state."""
+    now = now or datetime.now(timezone.utc)
+    period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    routers = db.scalars(select(WanRouter).where(WanRouter.enabled.is_(True)).order_by(WanRouter.site_label, WanRouter.display_name)).all()
+    ids = [router.id for router in routers]
+    observations_by_router: dict[int, list[WanObservation]] = {}
+    seen_before_period: set[int] = set()
+    if ids:
+        interval = max(1, get_settings().switch_collection_interval_minutes)
+        history_start = period_start - timedelta(minutes=interval)
+        for observation in db.scalars(select(WanObservation).where(WanObservation.wan_router_id.in_(ids), WanObservation.collected_at >= history_start, WanObservation.collected_at <= now).order_by(WanObservation.collected_at)).all():
+            observations_by_router.setdefault(observation.wan_router_id, []).append(observation)
+        seen_before_period = set(db.scalars(select(WanObservation.wan_router_id).where(WanObservation.wan_router_id.in_(ids), WanObservation.collected_at < period_start).group_by(WanObservation.wan_router_id)).all())
+    else:
+        interval = max(1, get_settings().switch_collection_interval_minutes)
+    sites: dict[str, dict] = {}
+    for router in routers:
+        link = {
+            "router_id": router.id,
+            "name": router.display_name,
+            "provider": router.provider or "Unspecified",
+            "current_state": _current_link_state(router, now),
+            **_monthly_link_sla(observations_by_router.get(router.id, []), period_start, now, interval, router.id in seen_before_period),
+        }
+        site = sites.setdefault(router.site_label or router.city or "Unassigned", {"site": router.site_label or router.city or "Unassigned", "links": []})
+        site["links"].append(link)
+    items = []
+    for site in sites.values():
+        state, action = _site_service_state(site["links"])
+        items.append({**site, "state": state, "action": action})
+    severity = {"Full outage": 0, "Serious alert": 1, "Insufficient evidence": 2, "Healthy": 3}
+    items.sort(key=lambda item: (severity[item["state"]], item["site"]))
+    return {"target": get_settings().sla_target, "period_start": period_start.date().isoformat(), "as_of": now.isoformat(), "sites": items}
+
+
 # ---------------------------------------------------------------- endpoints
 
 @router.get("/overview")
@@ -321,6 +434,11 @@ def wan_overview(db: Session = Depends(session), _: dict = Depends(current_user)
         "last_sync": max(last).isoformat() if last else None,
         "note": "WAN provider-managed routers — shown for visibility only. Not part of Medline SLA, Overview, or reports.",
     }
+
+
+@router.get("/service-level")
+def service_level(db: Session = Depends(session), _: dict = Depends(current_user)) -> dict:
+    return provider_service_level(db)
 
 
 @router.get("/routers")

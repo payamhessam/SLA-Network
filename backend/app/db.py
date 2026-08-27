@@ -218,8 +218,8 @@ class WanRouter(Base):
     read-only from LogicMonitor for visibility only and are deliberately kept in
     their own table so they can NEVER be joined into the Device Fleet analytics
     (SLA, Overview, resilience, trends, reports). The latest collected snapshot is
-    stored inline on the row (status/details JSON) — no history, since nothing about
-    these routers is ever charted or scored for the company."""
+    stored inline on the row (status/details JSON); a separate small evidence trail
+    supports the provider-link service-level report only."""
     __tablename__ = "wan_routers"
     id: Mapped[int] = mapped_column(primary_key=True)
     display_name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
@@ -242,6 +242,21 @@ class WanRouter(Base):
     last_sync: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     created_by: Mapped[str] = mapped_column(String(120), default="")
+
+
+class WanObservation(Base):
+    """A small, append-only evidence trail for contractual WAN-link reporting.
+
+    This deliberately stores only the observed link state and reachability at collection
+    time.  It contains no credentials, configuration text, or customer information.
+    """
+    __tablename__ = "wan_observations"
+    __table_args__ = (UniqueConstraint("wan_router_id", "collected_at", name="uq_wan_observation_router_time"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    wan_router_id: Mapped[int] = mapped_column(ForeignKey("wan_routers.id", ondelete="CASCADE"), index=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="Unknown")
+    reachability: Mapped[float | None] = mapped_column(Float)
 
 
 class SshFacts(Base):

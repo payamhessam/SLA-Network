@@ -3,7 +3,9 @@
  *
  * A deliberately separate, read-only view of the WAN providers' routers (e.g.
  * Centrilogic circuits). These devices are NOT Medline's and are never counted in the
- * company's SLA, Overview, or reports. The page mirrors the Fleet + Overview style:
+ * company's SLA, Overview, or reports. Provider links do have a separate, evidence-
+ * gated service-level report that cannot change the company's fleet SLA. The page mirrors
+ * the Fleet + Overview style:
  * an executive summary, a per-provider breakdown, a router table, and a device-detail
  * view with routing tabs (BGP / OSPF / EIGRP / IP routing stats / interfaces / inventory
  * / neighbours). Only administrators can add or remove routers. Data: /wan/*.
@@ -16,18 +18,19 @@ import'./overview.css';
 import{fmtPct}from'./format';
 
 type Props={token:string;administrator:boolean};
-const badge=(s:string)=>{const x=(s||'').toLowerCase();if(x.includes('healthy')||x.includes('monitored')&&!x.includes('not'))return'ok';if(x.includes('warn')||x.includes('applied'))return'warn';if(x.includes('critical'))return'crit';return'unknown'};
+const badge=(s:string)=>{const x=(s||'').toLowerCase();if(x.includes('healthy')||x.includes('monitored')&&!x.includes('not'))return'ok';if(x.includes('warn')||x.includes('applied')||x.includes('serious'))return'warn';if(x.includes('critical')||x.includes('outage'))return'crit';return'unknown'};
 const reach=(v:any)=>fmtPct(v);
 
 export default function WanProviders({token,administrator}:Props){
   const[ov,setOv]=useState<any>(null);const[rows,setRows]=useState<any[]>([]);
+  const[serviceLevel,setServiceLevel]=useState<any>(null);
   const[error,setError]=useState('');const[busy,setBusy]=useState(false);
   const[detail,setDetail]=useState<any>(null);const[tab,setTab]=useState('BGP Peers');
   const[adding,setAdding]=useState(false);const[q,setQ]=useState('');const[found,setFound]=useState<any[]>([]);const[searching,setSearching]=useState(false);
   const[sites,setSites]=useState<any[]>([]);const[edit,setEdit]=useState<any|null>(null);
   const[view,setView]=useState<'table'|'cards'>('table');const pg=usePager(rows);
   const request=async(path:string,options:RequestInit={})=>{const r=await fetch('/api/v1'+path,{...options,headers:{Authorization:`Bearer ${token}`,...(options.body?{'Content-Type':'application/json'}:{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Request failed');return r.status===204?null:r.json()};
-  const load=async()=>{setError('');try{const[o,l]=await Promise.all([request('/wan/overview'),request('/wan/routers')]);setOv(o);setRows(l.items)}catch(x:any){setError(x.message)}request('/settings/sites').then(s=>setSites(s||[])).catch(()=>{})};
+  const load=async()=>{setError('');try{const[o,l,sl]=await Promise.all([request('/wan/overview'),request('/wan/routers'),request('/wan/service-level')]);setOv(o);setRows(l.items);setServiceLevel(sl)}catch(x:any){setError(x.message)}request('/settings/sites').then(s=>setSites(s||[])).catch(()=>{})};
   const saveLocation=async()=>{if(!edit)return;setBusy(true);try{await request(`/wan/routers/${edit.id}/location`,{method:'PATCH',body:JSON.stringify({city:edit.city,province:edit.province})});setEdit(null);await load()}catch(x:any){setError(x.message)}finally{setBusy(false)}};
   useEffect(()=>{load()},[]);
   const openDetail=async(id:number)=>{setBusy(true);try{setDetail(await request(`/wan/routers/${id}`));setTab('BGP Peers')}catch(x:any){setError(x.message)}finally{setBusy(false)}};
@@ -43,8 +46,19 @@ export default function WanProviders({token,administrator}:Props){
       {administrator&&<button className="ov-export" onClick={()=>{setAdding(a=>!a);setFound([]);setQ('')}}>{adding?<X size={15}/>:<Plus size={15}/>} {adding?'Close':'Add router'}</button>}</div>
     {error&&<div className="ov-summary" style={{borderLeftColor:'var(--ov-crit)'}}><p style={{color:'var(--ov-crit)'}}>{error}</p></div>}
 
-    <div className="ov-summary"><h2>Provider-managed — not part of Medline metrics<Help text="These are the WAN providers' routers (e.g. Centrilogic circuits), shown read-only for visibility. They are collected from LogicMonitor but are never included in Medline's SLA, Overview, trends, or reports."/></h2>
+    <div className="ov-summary"><h2>Provider-managed — separate from Medline metrics<Help text="These are the WAN providers' routers (e.g. Centrilogic circuits), shown read-only for visibility. Their separate monthly service-level report never changes Medline's fleet SLA, Overview, or trends."/></h2>
       <p>{ov?.note||'WAN provider-managed routers — shown for visibility only.'}</p></div>
+
+    <div className="ov-panel"><div className="ov-panel-head"><h2><ShieldAlert size={15}/> Internet service level<Help text="A separate monthly measure for each provider link. The 99.9% target is shown only when enough real observations cover the month. A planned provider repair remains counted; a gap in collection withholds the SLA number instead of making it look better."/></h2><span className="tag">Target {fmtPct(serviceLevel?.target)}</span></div>
+      <div className="ov-table-wrap"><table className="ov-table"><thead><tr>{['Site','Current service','Provider link','Monthly result','Evidence','Action'].map(h=><th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{(serviceLevel?.sites||[]).flatMap((site:any)=>(site.links||[]).map((link:any,index:number)=><tr key={link.router_id}>
+          <td>{index===0?site.site:'—'}</td><td>{index===0?<span className={'ov-badge '+badge(site.state)}>{site.state}</span>:'—'}</td>
+          <td>{link.provider}<div className="ov-sub">{link.name}</div></td>
+          <td className="mono">{link.availability==null?<span className="muted">Insufficient evidence</span>:fmtPct(link.availability)}</td>
+          <td className="mono">{fmtPct(link.coverage)} <span className="muted">coverage</span></td><td>{index===0?site.action:'—'}</td>
+        </tr>))}</tbody></table></div>
+      {!serviceLevel?.sites?.length&&<div className="ds-empty"><Globe size={26}/><div>No provider links have been added yet.</div></div>}
+    </div>
 
     {administrator&&adding&&<div className="ov-panel"><div className="ov-panel-head"><h2><Search size={15}/> Add a router from LogicMonitor</h2></div>
       <div style={{padding:'16px 18px'}}>

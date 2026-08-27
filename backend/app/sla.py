@@ -12,9 +12,10 @@ import asyncio
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -297,6 +298,8 @@ def _aggregate(rows: list[SlaDaily]) -> dict:
         by_device.setdefault(getattr(r, "device_id", None), []).append(r)
     expected = observed = up = 0
     first_days: list[date] = []
+    newest_days: list[date] = []
+    missing_evidence_days = 0
     for drows in by_device.values():
         if all(getattr(r, "day", None) is not None for r in drows):
             drows.sort(key=lambda r: r.day)
@@ -307,6 +310,10 @@ def _aggregate(rows: list[SlaDaily]) -> dict:
         day0 = getattr(measurable[0], "day", None)
         if day0 is not None:
             first_days.append(day0)
+        observed_days = [getattr(r, "day", None) for r in measurable if r.observed_minutes > 0 and getattr(r, "day", None) is not None]
+        if observed_days:
+            newest_days.append(max(observed_days))
+        missing_evidence_days += sum(1 for r in measurable if r.expected_minutes > 0 and r.observed_minutes == 0)
         expected += sum(r.expected_minutes for r in measurable)
         observed += sum(r.observed_minutes for r in measurable)
         up += sum(r.up_minutes for r in measurable)
@@ -324,14 +331,65 @@ def _aggregate(rows: list[SlaDaily]) -> dict:
         "expected_minutes": expected,
         "days": len(rows),
         "first_observed": min(first_days).isoformat() if first_days else None,
-        "newest_observed": max(first_days).isoformat() if first_days else None,
+        "newest_observed": max(newest_days).isoformat() if newest_days else None,
+        "missing_evidence_days": missing_evidence_days,
         "status": "ok" if sufficient else "Insufficient evidence",
     }
 
 
+def _expected_minutes(day: date) -> int:
+    """Expected monitored minutes for a completed day, or elapsed minutes for today."""
+    start, end = day_bounds_epoch(day)
+    now = int(datetime.now(timezone.utc).timestamp())
+    return max(0, round((min(end, now) - start) / 60))
+
+
+def _monitored_since(db: Session, device_ids: list[int]) -> dict[int, date]:
+    """First genuinely observed day per device, including history outside this window."""
+    if not device_ids:
+        return {}
+    return {
+        device_id: first_day
+        for device_id, first_day in db.execute(
+            select(SlaDaily.device_id, func.min(SlaDaily.day))
+            .where(SlaDaily.device_id.in_(device_ids), SlaDaily.observed_minutes > 0)
+            .group_by(SlaDaily.device_id)
+        )
+    }
+
+
+def _fill_missing_evidence(rows: list[SlaDaily], start: date, end: date, monitored_since: dict[int, date]) -> list[SlaDaily]:
+    """Make post-onboarding gaps visible to coverage without writing invented measurements.
+
+    The database intentionally preserves a distinction between an actual zero and a failed
+    fetch.  At read time, however, a missing date *after* a device has already been observed
+    is evidence of a monitoring gap and must be included in the coverage denominator.  These
+    transient rows therefore carry expected time but no observed/up time; they are never
+    stored and can never overwrite a real measurement.
+    """
+    output = list(rows)
+    present = {(row.device_id, row.day) for row in rows}
+    for device_id, first_day in monitored_since.items():
+        day = max(start, first_day)
+        while day <= end:
+            if (device_id, day) not in present:
+                output.append(SimpleNamespace(
+                    device_id=device_id,
+                    day=day,
+                    expected_minutes=_expected_minutes(day),
+                    observed_minutes=0,
+                    up_minutes=0,
+                    availability=None,
+                    coverage=0.0,
+                    source="Missing LogicMonitor evidence",
+                ))
+            day += timedelta(days=1)
+    return output
+
+
 def window(db: Session, device_id: int, start: date, end: date) -> dict:
     rows = db.scalars(select(SlaDaily).where(SlaDaily.device_id == device_id, SlaDaily.day >= start, SlaDaily.day <= end)).all()
-    result = _aggregate(rows)
+    result = _aggregate(_fill_missing_evidence(rows, start, end, _monitored_since(db, [device_id])))
     result["start"] = start.isoformat()
     result["end"] = end.isoformat()
     return result
@@ -364,20 +422,24 @@ def fleet_sla(db: Session) -> dict:
     if dev_ids:
         for r in db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(dev_ids), SlaDaily.day >= ys, SlaDaily.day <= ye)).all():
             by_dev.setdefault(r.device_id, []).append(r)
+    monitored_since = _monitored_since(db, dev_ids)
 
-    def _win(rows, start, end):
-        agg = _aggregate([r for r in rows if start <= r.day <= end])
+    def _win(device_id, rows, start, end):
+        window_rows = [r for r in rows if start <= r.day <= end]
+        agg = _aggregate(_fill_missing_evidence(window_rows, start, end, {device_id: monitored_since[device_id]} if device_id in monitored_since else {}))
         agg["start"] = start.isoformat(); agg["end"] = end.isoformat()
-        return agg
+        return agg, _fill_missing_evidence(window_rows, start, end, {device_id: monitored_since[device_id]} if device_id in monitored_since else {})
 
     for d in devices:
         drows = by_dev.get(d.id, [])
-        dy = _win(drows, ys, ye)
-        dw = _win(drows, ws, we)
+        dy, ytd_coverage_rows = _win(d.id, drows, ys, ye)
+        dw, wtd_coverage_rows = _win(d.id, drows, ws, we)
+        rolling_7, _ = _win(d.id, drows, rs, re_)
+        prev_week, _ = _win(d.id, drows, ps, pe)
         entries.append({"device_id": d.id, "lm_device_id": d.lm_device_id, "hostname": d.hostname, "site": d.site,
-                        "rolling_7": _win(drows, rs, re_), "wtd": dw, "prev_week": _win(drows, ps, pe), "ytd": dy})
-        ytd_rows += drows
-        wtd_rows += [r for r in drows if ws <= r.day <= we]
+                        "rolling_7": rolling_7, "wtd": dw, "prev_week": prev_week, "ytd": dy})
+        ytd_rows += ytd_coverage_rows
+        wtd_rows += wtd_coverage_rows
         if dy["availability"] is not None and dy["availability"] < target:
             below += 1
     fleet_ytd = _aggregate(ytd_rows)

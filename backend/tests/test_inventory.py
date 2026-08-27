@@ -84,4 +84,4 @@ def test_access_point_import_validation_and_replace():
         result=client.post(f"/api/v1/access-points/import/{validation.json()['job_id']}/commit?mode=replace",headers=h)
         assert result.status_code==200 and result.json()["records"]==1
         inventory=client.get("/api/v1/access-points",headers=h).json()
-        assert inventory["summary"]["total"]==1 and inventory["items"][0]["city"]=="Quebec City" and inventory["items"][0]["status"]=="Offline"
+        assert inventory["summary"]["total"]==1 and inventory["items"][0]["city"]=="Quebec City" and inventory["items"][0]["status"]=="Unknown"

@@ -96,6 +96,11 @@ def incidents(db: Session, days: int = 90, fleet=None) -> list[dict]:
         rows = by_dev.get(d["device_id"], [])
         run = None
         for r in rows:
+            # A missing calendar day is a monitoring gap, not proof that an incident
+            # continued.  Close the current estimate so MTTR/MTBF never bridge unknown time.
+            if run and (r.day - run["end"]).days > 1:
+                out.append({**run, "device": d["hostname"], "city": d["city"], "device_id": d["device_id"]})
+                run = None
             bad = r.coverage >= settings.coverage_threshold and r.availability is not None and r.availability < 100.0
             if bad:
                 down = max(0, r.observed_minutes - r.up_minutes)

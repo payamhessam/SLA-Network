@@ -14,3 +14,4 @@ pytest==9.0.3
 python-pptx==1.0.2
 ntc-templates==7.9.0
 textfsm==1.1.3
+tzdata==2026.3

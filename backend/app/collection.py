@@ -18,10 +18,26 @@ from .logicmonitor import LogicMonitorClient
 
 
 def latest(data):
-    # Reduce a LogicMonitor datapoint time-series to its most recent sample:
-    # zip the datapoint names with the last row of values (empty if no data).
-    points, values = data.get("dataPoints", []), data.get("values", [])
-    return dict(zip(points, values[-1])) if values else {}
+    """Reduce a LogicMonitor series to its newest sample.
+
+    LogicMonitor normally returns samples newest-first.  Do not rely on that ordering,
+    though: the API also provides a timestamp for every row and a changed response order
+    must never turn an old failure (or old healthy state) into the reported current state.
+    """
+    points = data.get("dataPoints", []) or []
+    values = data.get("values", []) or []
+    times = data.get("time", []) or []
+    if not values:
+        return {}
+    candidates = []
+    for index, value in enumerate(times[:len(values)]):
+        try:
+            candidates.append((float(value), index))
+        except (TypeError, ValueError):
+            continue
+    # The documented fallback is newest-first, not the old values[-1] assumption.
+    index = max(candidates)[1] if candidates else 0
+    return dict(zip(points, values[index]))
 
 
 def numeric(value):

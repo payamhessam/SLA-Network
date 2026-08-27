@@ -41,6 +41,47 @@ def test_throughput_is_not_fabricated():
     assert t["available"] is False and t["value"] is None
 
 
+def test_nearest_rank_p95_does_not_turn_into_the_peak():
+    values = list(range(1, 21))
+    assert overview._nearest_rank(values, 0.95) == 19
+    assert overview._nearest_rank(values, 1.0) == 20
+
+
+def test_monthly_provider_sla_withholds_a_number_when_collection_has_a_gap():
+    from app.wan import _monthly_link_sla
+    period = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    observations = [
+        SimpleNamespace(collected_at=period, status="Healthy"),
+        SimpleNamespace(collected_at=period + timedelta(minutes=60), status="Healthy"),
+    ]
+    result = _monthly_link_sla(observations, period, period + timedelta(minutes=90), 30)
+    assert result["availability"] is None
+    assert result["coverage"] == round(200 / 3, 2)
+
+
+def test_monthly_provider_sla_counts_planned_work_as_downtime():
+    from app.wan import _monthly_link_sla
+    period = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    observations = [
+        SimpleNamespace(collected_at=period, status="Healthy"),
+        SimpleNamespace(collected_at=period + timedelta(minutes=30), status="Critical"),
+        SimpleNamespace(collected_at=period + timedelta(minutes=60), status="Healthy"),
+    ]
+    result = _monthly_link_sla(observations, period, period + timedelta(minutes=90), 30)
+    assert result["coverage"] == 100.0
+    assert round(result["availability"], 4) == round(200 / 3, 4)
+
+
+def test_existing_provider_link_is_accountable_from_the_first_day_of_month():
+    from app.wan import _monthly_link_sla
+    period = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    observations = [SimpleNamespace(collected_at=period + timedelta(minutes=60), status="Healthy")]
+    result = _monthly_link_sla(observations, period, period + timedelta(minutes=90), 30, monitoring_started_before_period=True)
+    assert result["availability"] is None
+    assert result["expected_minutes"] == 90
+    assert result["coverage"] == round(100 / 3, 2)
+
+
 def test_throughput_withholds_stale_snapshot():
     snap = SimpleNamespace(collected_at=datetime.now(timezone.utc) - timedelta(minutes=61), details={"tables": {"Interfaces": [{"Status": "up", "Speed": 1_000_000_000, "In Utilization %": 2, "Out Utilization %": 1}]}})
     t = overview.throughput(None, [_dev(snap=snap)])

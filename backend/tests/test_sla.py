@@ -7,6 +7,7 @@ os.environ.setdefault("LOCAL_USER_PASSWORD", "viewer-password-long")
 os.environ.setdefault("JWT_SECRET", "test-secret-long-enough-32-bytes")
 
 from app import resilience, sla
+from app.collection import latest
 
 
 def _day(expected, observed, up, device_id=1, day=None):
@@ -60,6 +61,24 @@ def test_counts_from_samples_handles_descending_time():
     # Missing datapoint -> no observation, not a fabricated number
     o, u, k = sla._counts_from_samples({"dataPoints": [], "values": []})
     assert k is False and o == 0.0 and u == 0.0
+
+
+def test_missing_evidence_after_monitoring_started_reduces_coverage():
+    from datetime import date, timedelta
+    first = date(2026, 1, 1)
+    rows = [_day(1440, 1440, 1440, device_id=7, day=first)]
+    filled = sla._fill_missing_evidence(rows, first, first + timedelta(days=2), {7: first})
+    agg = sla._aggregate(filled)
+    assert agg["availability"] is None
+    assert agg["coverage"] == round(100 / 3, 2)
+    assert agg["missing_evidence_days"] == 2
+
+
+def test_latest_uses_newest_timestamp_not_response_position():
+    data = {"dataPoints": ["CPU"], "time": [3000, 2000, 1000], "values": [[90], [50], [10]]}
+    assert latest(data) == {"CPU": 90}
+    reordered = {"dataPoints": ["CPU"], "time": [1000, 3000, 2000], "values": [[10], [90], [50]]}
+    assert latest(reordered) == {"CPU": 90}
 
 
 def _signals(uplinks, stack, dual_power, stack_known=True):

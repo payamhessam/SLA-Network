@@ -6,6 +6,7 @@ sla_daily and resilience stores that the background collectors already maintain.
 Missing evidence is reported as INSUFFICIENT EVIDENCE / NOT MONITORED / UNKNOWN — never
 fabricated as 0% or 100%.
 """
+import math
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, select
@@ -97,7 +98,7 @@ def _fleet_window(db: Session, device_ids: list[int], start: date, end: date) ->
     if not device_ids:
         return {"availability": None, "coverage": 0.0, "status": "Insufficient evidence"}
     rows = db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(device_ids), SlaDaily.day >= start, SlaDaily.day <= end)).all()
-    return sla._aggregate(rows)
+    return sla._aggregate(sla._fill_missing_evidence(rows, start, end, sla._monitored_since(db, device_ids)))
 
 
 def header(db: Session, fleet: list[dict]) -> dict:
@@ -176,7 +177,7 @@ def availability_series(db: Session, fleet: list[dict], days: int = 7) -> dict:
     for n in range(days - 1, -1, -1):
         day = ref - _delta(n)
         rows = db.scalars(select(SlaDaily).where(SlaDaily.device_id.in_(ids), SlaDaily.day == day)).all() if ids else []
-        agg = sla._aggregate(rows)
+        agg = _fleet_window(db, ids, day, day)
         cause = None
         avail = agg["availability"]
         abnormal = avail is not None and avail < settings.sla_target
@@ -416,6 +417,14 @@ def _scale_bps(bps: float) -> dict:
     return {"value": round(g, 2), "unit": "Gbps"} if g >= 1 else {"value": round(bps / 1e6, 1), "unit": "Mbps"}
 
 
+def _nearest_rank(values: list[float], fraction: float) -> float | None:
+    """Nearest-rank percentile; the 95th of 20 values is item 19, not the maximum."""
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1)]
+
+
 def throughput_window(db: Session, hours: int = 24) -> dict:
     """Windowed fleet throughput (in+out) from stored snapshot history: hourly buckets over
     the last `hours`, each device carried forward to the next bucket, then average / peak / p95.
@@ -439,10 +448,9 @@ def throughput_window(db: Session, hours: int = 24) -> dict:
         fleet = sum(last.get(d, 0.0) for d in devices)
         series.append((hb, fleet))
     vals = [v for _, v in series]
-    vals_sorted = sorted(vals)
     avg = sum(vals) / len(vals)
     peak = max(vals)
-    p95 = vals_sorted[min(len(vals_sorted) - 1, int(len(vals_sorted) * 0.95))]
+    p95 = _nearest_rank(vals, 0.95)
     return {
         "available": True, "hours": hours, "buckets": len(series),
         "average": _scale_bps(avg), "peak": _scale_bps(peak), "p95": _scale_bps(p95),
