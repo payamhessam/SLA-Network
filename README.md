@@ -8,7 +8,7 @@ Read-only LogicMonitor reporting for Cisco network devices, including Catalyst 9
 2. Run `docker compose up --build`.
 3. Open `http://localhost:8080`. Development login: `admin` / the value of `LOCAL_ADMIN_PASSWORD`.
 
-The application builds dedicated project images named `medline-enterprise-network-sla-api:1.1.1` and `medline-enterprise-network-sla-web:1.1.1`. It does not reuse application images from other projects. See `CHANGELOG.md` for the version history.
+The application builds dedicated project images named `medline-enterprise-network-sla-api:1.2.0` and `medline-enterprise-network-sla-web:1.2.0`. It does not reuse application images from other projects. See `CHANGELOG.md` for the version history.
 
 Credentials pasted into chat should be rotated. They are intentionally absent from this repository.
 

@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     report_dir: str = "/reports"
     stale_minutes: int = 30
     switch_collection_interval_minutes: int = 30
+    application_collection_interval_minutes: int = 5
+    application_services_file: str = "/data/application-services.json"
     sla_target: float = 99.9
     coverage_threshold: float = 90.0
     sla_timezone: str = "America/Vancouver"

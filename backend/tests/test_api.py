@@ -16,6 +16,13 @@ def test_health():
     with TestClient(app) as client: assert client.get("/api/v1/health").status_code==200
 def test_auth_required():
     with TestClient(app) as client: assert client.get("/api/v1/devices").status_code==401
+def test_applications_endpoint_requires_login_and_reports_an_empty_scope_honestly():
+    with TestClient(app) as client:
+        assert client.get("/api/v1/applications").status_code == 401
+        response = client.get("/api/v1/applications", headers={"Authorization": f"Bearer {issue_token('api-test')}"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == len(payload["items"])
 def test_logicmonitor_numeric_strings_are_normalized_without_fabricating_missing_values():
     assert numeric("1.5") == 1.5
     assert numeric("not monitored") is None

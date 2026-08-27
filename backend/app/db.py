@@ -144,6 +144,44 @@ class ImportJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
+class ApplicationService(Base):
+    """A business service or application endpoint, deliberately separate from network gear."""
+    __tablename__ = "application_services"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    service_name: Mapped[str] = mapped_column(String(255))
+    application: Mapped[str] = mapped_column(String(80), index=True)
+    environment: Mapped[str] = mapped_column(String(40), default="Unclassified")
+    endpoint: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    endpoint_kind: Mapped[str] = mapped_column(String(20), default="ip")
+    check_port: Mapped[int | None] = mapped_column(Integer)
+    criticality: Mapped[str] = mapped_column(String(30), default="High")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    logicmonitor_device_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    logicmonitor_display_name: Mapped[str | None] = mapped_column(String(255))
+    mapping_status: Mapped[str] = mapped_column(String(50), default="Mapping pending")
+    mapping_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ApplicationObservation(Base):
+    """Append-only, non-sensitive evidence used for application status and quality reports."""
+    __tablename__ = "application_observations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_service_id: Mapped[int] = mapped_column(ForeignKey("application_services.id", ondelete="CASCADE"), index=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="Unknown")
+    dns_ok: Mapped[bool | None] = mapped_column(Boolean)
+    port_ok: Mapped[bool | None] = mapped_column(Boolean)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    packet_loss_pct: Mapped[float | None] = mapped_column(Float)
+    availability_pct: Mapped[float | None] = mapped_column(Float)
+    route_status: Mapped[str] = mapped_column(String(80), default="Route evidence pending")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    service: Mapped[ApplicationService] = relationship()
+
+
 class AccessPointInventory(Base):
     __tablename__ = "access_point_inventory"
     id: Mapped[int] = mapped_column(primary_key=True)

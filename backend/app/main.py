@@ -32,16 +32,18 @@ from .reporting import create_report
 from .schemas import DeviceCreate, DeviceOut, DeviceUpdate, Login
 from .switch_refresh import switch_refresh_loop, switch_freshness_watchdog_loop
 from .wan import router as wan_router, wan_refresh_loop, bootstrap_wan
+from .applications import router as applications_router, application_refresh_loop, bootstrap_applications
 from . import overview, pathres, reports, resilience, sla, ssh_collect, telemetry, trends
 
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 # Disable the interactive docs and OpenAPI schema in production (no API surface disclosure).
 _docs_url = None if settings.is_production else "/docs"
-app = FastAPI(title="Enterprise Network Health and SLA", version="1.1.1",
+app = FastAPI(title="Enterprise Network Health and SLA", version="1.2.0",
               docs_url=_docs_url, redoc_url=None, openapi_url=(None if settings.is_production else "/openapi.json"))
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 app.include_router(inventory_router)
+app.include_router(applications_router)
 app.include_router(access_point_router)
 app.include_router(wan_router)
 
@@ -64,7 +66,9 @@ async def startup():
             conn.execute(text("ALTER TABLE sites ADD COLUMN IF NOT EXISTS business_unit varchar(40) DEFAULT 'Unassigned'"))
             conn.execute(text("ALTER TABLE wan_routers ADD COLUMN IF NOT EXISTS city varchar(120) DEFAULT ''"))
             conn.execute(text("ALTER TABLE wan_routers ADD COLUMN IF NOT EXISTS province varchar(80) DEFAULT ''"))
-    with SessionLocal() as db: seed_inventory(db)
+    with SessionLocal() as db:
+        seed_inventory(db)
+        bootstrap_applications(db)
     app.state.switch_refresh_task = asyncio.create_task(switch_refresh_loop())
     app.state.switch_freshness_watchdog_task = asyncio.create_task(switch_freshness_watchdog_loop())
     app.state.sla_rollup_task = asyncio.create_task(sla.sla_rollup_loop())
@@ -72,6 +76,7 @@ async def startup():
     app.state.ap_status_task = asyncio.create_task(ap_status_loop())
     app.state.wan_refresh_task = asyncio.create_task(wan_refresh_loop())
     app.state.wan_bootstrap_task = asyncio.create_task(bootstrap_wan())
+    app.state.application_refresh_task = asyncio.create_task(application_refresh_loop())
     if await sla.needs_backfill():
         # Seed an empty database, or top up devices added after the first backfill
         # (force=False resumes each device from its last covered day, so this is cheap
@@ -81,7 +86,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    for name in ("switch_refresh_task", "switch_freshness_watchdog_task", "sla_rollup_task", "resilience_task", "ap_status_task", "wan_refresh_task", "wan_bootstrap_task", "sla_backfill_task"):
+    for name in ("switch_refresh_task", "switch_freshness_watchdog_task", "sla_rollup_task", "resilience_task", "ap_status_task", "wan_refresh_task", "wan_bootstrap_task", "application_refresh_task", "sla_backfill_task"):
         task = getattr(app.state, name, None)
         if task:
             task.cancel()
@@ -116,7 +121,7 @@ def me(user=Depends(current_user)):
 @app.get("/api/v1/health")
 def health(db: Session = Depends(session)):
     db.execute(select(func.count(Device.id))).scalar()
-    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.1.1"}
+    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.2.0"}
 
 
 @app.get("/api/v1/path-resilience")
