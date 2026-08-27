@@ -130,7 +130,8 @@ def global_sla(db: Session, fleet: list[dict]) -> dict:
     ids = [d["device_id"] for d in fleet if d["device_id"]]
     ref = sla.today_local()
     d30 = _fleet_window(db, ids, *sla._window_bounds("rolling_30", ref))
-    d7 = _fleet_window(db, ids, ref - _delta(7), ref)
+    # Inclusive bounds: today plus the preceding six dates is exactly seven days.
+    d7 = _fleet_window(db, ids, ref - _delta(6), ref)
     ytd = _fleet_window(db, ids, *sla._window_bounds("ytd", ref))
     current = d30["availability"]
     target = settings.sla_target

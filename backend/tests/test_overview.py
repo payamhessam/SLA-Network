@@ -9,6 +9,10 @@ os.environ.setdefault("JWT_SECRET", "test-secret-long-enough-32-bytes")
 
 from app import overview
 
+def test_global_sla_uses_exactly_seven_dates_for_its_seven_day_trend():
+    from datetime import date
+    assert overview.sla._window_bounds("rolling_7", date(2026, 8, 27)) == (date(2026, 8, 21), date(2026, 8, 27))
+
 
 def _dev(band="Medium", status="Healthy", match="Matched", snap=None):
     return {"device_id": 1, "hostname": "CA05-Z01-DSW-01", "city": "Delta", "model": "C9300",

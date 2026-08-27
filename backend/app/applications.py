@@ -2,16 +2,18 @@
 import asyncio
 import json
 import logging
+import re
 import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import current_user
+from .auth import administrator, current_user
 from .collection import latest, numeric
 from .config import get_settings
 from .db import ApplicationObservation, ApplicationService, SessionLocal, session
@@ -19,6 +21,15 @@ from .logicmonitor import LogicMonitorClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/applications", tags=["applications"])
+
+class ApplicationCreate(BaseModel):
+    service_name: str = Field(min_length=2, max_length=255)
+    application: str = Field(min_length=2, max_length=80)
+    environment: str = Field(default="Unclassified", max_length=40)
+    endpoint: str = Field(min_length=2, max_length=255)
+    endpoint_kind: str = Field(default="hostname", pattern="^(hostname|ip)$")
+    check_port: int | None = Field(default=None, ge=1, le=65535)
+    criticality: str = Field(default="High", max_length=30)
 
 def _configured_scope() -> list[dict]:
     """Read the company-specific application scope from its local Docker data mount.
@@ -171,3 +182,18 @@ def applications(db: Session = Depends(session), user=Depends(current_user)):
                        "dns_ok": latest_observation.dns_ok if latest_observation else None, "port_ok": latest_observation.port_ok if latest_observation else None,
                        "route_status": latest_observation.route_status if latest_observation else "Route evidence pending"})
     return {"items": output, "total": len(output)}
+
+@router.post("", status_code=201)
+def add_application(body: ApplicationCreate, db: Session = Depends(session), user=Depends(administrator)):
+    key = re.sub(r"[^a-z0-9]+", "-", f"{body.application}-{body.service_name}".lower()).strip("-")[:80]
+    if db.scalar(select(ApplicationService).where((ApplicationService.endpoint == body.endpoint) | (ApplicationService.service_key == key))):
+        raise HTTPException(409, "An application with this name or endpoint already exists.")
+    service = ApplicationService(service_key=key, **body.model_dump())
+    db.add(service); db.commit(); db.refresh(service)
+    return {"id": service.id, "name": service.service_name}
+
+@router.delete("/{service_id}", status_code=204)
+def remove_application(service_id: int, db: Session = Depends(session), user=Depends(administrator)):
+    service = db.get(ApplicationService, service_id)
+    if not service: raise HTTPException(404, "Application not found.")
+    db.delete(service); db.commit()

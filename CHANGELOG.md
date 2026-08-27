@@ -1,5 +1,9 @@
 # سابقهٔ نسخه‌ها
 
+## 1.2.3 — 27 August 2026
+
+- Corrected the exact seven-day SLA trend window and separated physical device, stack, and monitoring-record counts.
+
 ## 1.2.1 — 27 August 2026
 
 - گزارش SAP از داده‌های موجود LogicMonitor، مصرف پردازش و حافظه را نیز نمایش می‌دهد؛ بدون استفاده از حساب کاربری SAP.
