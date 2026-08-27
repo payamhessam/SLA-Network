@@ -9,7 +9,7 @@ services:
     healthcheck: {test: [CMD-SHELL, "pg_isready -U network_sla"], interval: 10s, timeout: 5s, retries: 5}
     networks: [internal]
   api:
-    image: medline-enterprise-network-sla-api:1.1.0
+    image: medline-enterprise-network-sla-api:1.1.1
     build: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://network_sla:${POSTGRES_PASSWORD:-development-only-change-me}@postgres:5432/network_sla
@@ -28,7 +28,7 @@ services:
     tmpfs: [/tmp]
     security_opt: [no-new-privileges:true]
   frontend:
-    image: medline-enterprise-network-sla-web:1.1.0
+    image: medline-enterprise-network-sla-web:1.1.1
     build: ./frontend
     ports: ["8080:8080"]
     depends_on: {api: {condition: service_healthy}}

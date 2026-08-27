@@ -45,12 +45,12 @@ New-Item -ItemType Directory -Force "$Out\secrets" | Out-Null
 
 # Retag -> save -> untag, so this machine's image list is left exactly as it was.
 Info "Exporting images (renamed sla-network-*)..."
-docker tag medline-enterprise-network-sla-api:1.1.0 sla-network-api:1.1.0
-docker tag medline-enterprise-network-sla-web:1.1.0 sla-network-web:1.1.0
-docker save sla-network-api:1.1.0 -o "$Out\images\api.tar"
-docker save sla-network-web:1.1.0 -o "$Out\images\web.tar"
+docker tag medline-enterprise-network-sla-api:1.1.1 sla-network-api:1.1.1
+docker tag medline-enterprise-network-sla-web:1.1.1 sla-network-web:1.1.1
+docker save sla-network-api:1.1.1 -o "$Out\images\api.tar"
+docker save sla-network-web:1.1.1 -o "$Out\images\web.tar"
 docker save postgres:16.9-alpine3.22 -o "$Out\images\postgres.tar"
-docker rmi sla-network-api:1.1.0 sla-network-web:1.1.0 | Out-Null
+docker rmi sla-network-api:1.1.1 sla-network-web:1.1.1 | Out-Null
 
 if (-not $NoDatabase) {
     Info "Dumping the database (schema + data)..."
@@ -94,7 +94,7 @@ ENVIRONMENT=production
 Release $Tag
 Built from commit: $commit
 Database included: $(if ($NoDatabase) {'no'} else {'yes'})
-Images: sla-network-api:1.1.0, sla-network-web:1.1.0, postgres:16.9-alpine3.22
+Images: sla-network-api:1.1.1, sla-network-web:1.1.1, postgres:16.9-alpine3.22
 
 Restore on the PRODUCTION machine:
   1. Copy this whole folder over.

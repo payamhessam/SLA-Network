@@ -53,7 +53,7 @@ def test_provider_service_level_is_a_separate_coverage_gated_report():
         response = client.get("/api/v1/wan/service-level", headers={"Authorization": f"Bearer {issue_token('api-test')}"})
         assert response.status_code == 200
         site = next(item for item in response.json()["sites"] if item["site"] == "Toronto")
-        assert site["state"] == "Full outage"
+        assert site["state"] == "Critical service risk"
         assert site["links"][0]["availability"] is not None
 def test_add_ap_and_remove():
     with TestClient(app) as client:

@@ -360,7 +360,11 @@ def _site_service_state(links: list[dict]) -> tuple[str, str]:
     if usable and unavailable:
         return "Serious alert", "A provider link is unavailable, but another path is still carrying service."
     if links and unavailable == len(links):
-        return "Full outage", "Every observed provider link for this site is unavailable."
+        # A provider router being unreachable is strong evidence of risk, but it does
+        # not by itself prove that the business service is down.  A confirmed full
+        # outage needs the forthcoming end-to-end service probes and a complete
+        # circuit inventory, including any unregistered alternate paths.
+        return "Critical service risk", "Every recorded provider link is unavailable; confirm service impact and any unrecorded alternate path."
     if not usable:
         return "Insufficient evidence", "Current provider-link state cannot be confirmed."
     return "Healthy", "All observed provider links are currently available."
@@ -397,7 +401,7 @@ def provider_service_level(db: Session, now: datetime | None = None) -> dict:
     for site in sites.values():
         state, action = _site_service_state(site["links"])
         items.append({**site, "state": state, "action": action})
-    severity = {"Full outage": 0, "Serious alert": 1, "Insufficient evidence": 2, "Healthy": 3}
+    severity = {"Critical service risk": 0, "Serious alert": 1, "Insufficient evidence": 2, "Healthy": 3}
     items.sort(key=lambda item: (severity[item["state"]], item["site"]))
     return {"target": get_settings().sla_target, "period_start": period_start.date().isoformat(), "as_of": now.isoformat(), "sites": items}
 
