@@ -130,7 +130,7 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
   const h=o.header,g=o.global_sla,cr=o.criticality,av=o.availability_7d;
   const slaClass=g.status==='Target met'?'ok':g.status==='Insufficient evidence'?'unknown':g.status==='Below target'?'crit':'warn';
   const slaColor=stfg(slaClass);
-  const C=2*Math.PI*52,frac=g.current==null?0:Math.max(0,Math.min(1,g.current/100));
+  const C=2*Math.PI*52,frac=(g.current??g.observed_current)==null?0:Math.max(0,Math.min(1,(g.current??g.observed_current)/100));
   const D=2*Math.PI*44;let acc=0;const segs:[string,number][]=[['var(--ov-crit)',cr.bands.Critical||0],['var(--ov-warn)',cr.bands.High||0],['var(--ov-info)',cr.bands.Medium||0],['var(--ov-faint)',cr.bands.Low||0]];
   const barH=(v:any)=>v==null?8:Math.max(0,Math.min(100,v));
   return <div className="ov">
@@ -152,13 +152,13 @@ function Overview({devices,open,navigate}:{devices:Device[],open:(d:Device)=>voi
       <button className="ov-export" onClick={()=>exportReport('pptx')}><FileDown size={15}/> Executive PowerPoint</button>
     </div>
     <div className="ov-kpis">
-      <div className="ov-card"><h3>Global SLA Status<Help text="Fleet network availability over the trailing 30 days vs the SLA target, with the change (delta) and status. The ring fills to the availability %. Coverage-gated — shows Insufficient below 90% evidence."/></h3><div className="center">
+      <div className="ov-card"><h3>{g.official_available?'Global SLA Status':'Observed Availability'}<Help text="Official SLA appears only after 90% evidence coverage. Below that, this is observed availability, not a contractual SLA."/></h3><div className="center">
         <div style={{position:'relative',width:150,height:150}}>
           <svg viewBox="0 0 120 120" width="150" height="150" role="img" aria-label={`Global SLA ${g.current!=null?fmtPct(g.current):'insufficient evidence'} against a ${g.target}% target`}><circle cx="60" cy="60" r="52" fill="none" stroke="var(--ov-track)" strokeWidth="8"/><circle cx="60" cy="60" r="52" fill="none" stroke={slaColor} strokeWidth="8" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C*(1-frac)} transform="rotate(-90 60 60)"/></svg>
-          <div style={{position:'absolute',inset:0,display:'grid',placeItems:'center'}}><div className="ov-ring-val" style={{color:slaColor}}>{pct2(g.current)}</div></div>
+          <div style={{position:'absolute',inset:0,display:'grid',placeItems:'center'}}><div className="ov-ring-val" style={{color:slaColor}}>{pct2(g.current??g.observed_current)}</div></div>
         </div>
-        <div className="ov-sub">Target {g.target}% · {fmtPctDelta(g.delta)}</div>
-        <span className={'ov-chip '+slaClass}>{g.status}</span>
+        <div className="ov-sub">Coverage {fmtPct(g.coverage)} · Target {g.target}%</div>
+        <span className={'ov-chip '+slaClass}>{g.official_available?g.status:'Observed only — official SLA pending'}</span>
       </div></div>
       <div className="ov-card"><h3>Device Criticality<Help text="How important each device is to the BUSINESS — Critical / High / Medium / Low — set by hand in Settings → Device Inventory. This is NOT the device's current health: a Medium-criticality switch can still be faulty right now, which is what Core Infrastructure Health below shows. The centre number is the total fleet size and the ring shows the mix. If every device sits at Medium, that is the default — it means criticality has not been classified yet, not that every device was assessed as medium importance."/></h3><div className="center">
         <div style={{position:'relative',width:140,height:140}}>

@@ -134,6 +134,7 @@ def global_sla(db: Session, fleet: list[dict]) -> dict:
     d7 = _fleet_window(db, ids, ref - _delta(6), ref)
     ytd = _fleet_window(db, ids, *sla._window_bounds("ytd", ref))
     current = d30["availability"]
+    observed_current = round(100.0 * d30["up_minutes"] / d30["observed_minutes"], 4) if d30["observed_minutes"] else None
     target = settings.sla_target
     delta = round(current - target, 4) if current is not None else None
     if current is None:
@@ -144,7 +145,7 @@ def global_sla(db: Session, fleet: list[dict]) -> dict:
         status = "At risk"
     else:
         status = "Below target"
-    return {"current": current, "target": target, "delta": delta, "status": status,
+    return {"current": current, "observed_current": observed_current, "official_available": current is not None, "target": target, "delta": delta, "status": status,
             "window": "30-day", "trend_7d": d7["availability"], "trend_30d": d30["availability"],
             "ytd": ytd["availability"], "coverage": d30["coverage"]}
 

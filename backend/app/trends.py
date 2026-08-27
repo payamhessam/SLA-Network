@@ -32,9 +32,10 @@ def availability_trend(db: Session, weeks: int = 12, fleet=None) -> dict:
         start = this_monday - timedelta(weeks=w)
         end = min(start + timedelta(days=6), ref)
         agg = overview._fleet_window(db, ids, start, end)
+        observed = round(100.0 * agg["up_minutes"] / agg["observed_minutes"], 4) if agg["observed_minutes"] else None
         series.append({
             "week_start": start.isoformat(),
-            "availability": agg["availability"], "coverage": agg["coverage"], "status": agg["status"],
+            "availability": agg["availability"], "observed_availability": observed, "coverage": agg["coverage"], "status": agg["status"],
             "below_target": agg["availability"] is not None and agg["availability"] < target,
             "downtime_minutes": max(0, agg["observed_minutes"] - agg["up_minutes"]),
             "observed_minutes": agg["observed_minutes"],
