@@ -38,7 +38,7 @@ from . import overview, pathres, reports, resilience, sla, ssh_collect, telemetr
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 # Disable the interactive docs and OpenAPI schema in production (no API surface disclosure).
 _docs_url = None if settings.is_production else "/docs"
-app = FastAPI(title="Enterprise Network Health and SLA", version="1.2.0",
+app = FastAPI(title="Enterprise Network Health and SLA", version="1.2.1",
               docs_url=_docs_url, redoc_url=None, openapi_url=(None if settings.is_production else "/openapi.json"))
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
@@ -121,7 +121,7 @@ def me(user=Depends(current_user)):
 @app.get("/api/v1/health")
 def health(db: Session = Depends(session)):
     db.execute(select(func.count(Device.id))).scalar()
-    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.2.0"}
+    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.2.1"}
 
 
 @app.get("/api/v1/path-resilience")

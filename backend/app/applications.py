@@ -78,15 +78,28 @@ async def _lm_ping(client: LogicMonitorClient, service: ApplicationService) -> t
         return {}, None, None, "Mapping pending" if method in ("Not Found", "Ambiguous") else method
     device_id = int(remote["id"])
     applied = await client.applied_datasources(device_id)
-    source = next((x for x in applied if (x.get("dataSourceName") or x.get("name")) == "Ping"), None)
-    if not source:
-        return {}, device_id, remote.get("displayName"), "Matched · Ping not monitored"
-    instances = await client.instances(device_id, int(source["id"]))
-    if not instances:
-        return {}, device_id, remote.get("displayName"), "Matched · Ping has no evidence"
-    data = await client.instance_data(device_id, int(source["id"]), int(instances[0]["id"]), int(time.time()) - 3600, int(time.time()))
-    row = latest(data)
-    return {"loss": numeric(row.get("PingLossPercent")), "average": numeric(row.get("average")), "max": numeric(row.get("maxrtt"))}, device_id, remote.get("displayName"), "Matched"
+    by_name = {(x.get("dataSourceName") or x.get("name")): x for x in applied}
+
+    async def latest_for(name: str) -> dict:
+        source = by_name.get(name)
+        if not source:
+            return {}
+        instances = await client.instances(device_id, int(source["id"]))
+        if not instances:
+            return {}
+        data = await client.instance_data(device_id, int(source["id"]), int(instances[0]["id"]), int(time.time()) - 3600, int(time.time()))
+        return latest(data)
+
+    ping_row, linux_row, snmp_memory_row = await asyncio.gather(latest_for("Ping"), latest_for("Linux_SSH_CPUMemory"), latest_for("NetSNMP_Memory_Usage"))
+    if not ping_row:
+        return {"cpu": numeric(linux_row.get("CPUBusyPercent")), "memory": numeric(linux_row.get("PercentUsedMemory")),
+                "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched · Ping not monitored"
+    memory = numeric(linux_row.get("PercentUsedMemory"))
+    if memory is None:
+        used, total = numeric(snmp_memory_row.get("UsedMemory")), numeric(snmp_memory_row.get("TotalReal"))
+        memory = round(used * 100 / total, 1) if used is not None and total else None
+    return {"loss": numeric(ping_row.get("PingLossPercent")), "average": numeric(ping_row.get("average")), "max": numeric(ping_row.get("maxrtt")),
+            "cpu": numeric(linux_row.get("CPUBusyPercent")), "memory": memory, "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched"
 
 
 async def collect_application(service: ApplicationService) -> dict:
@@ -113,7 +126,8 @@ async def collect_application(service: ApplicationService) -> dict:
         status = "Unknown"
     return {"dns_ok": dns_ok, "port_ok": port_ok, "latency_ms": direct_latency if direct_latency is not None else lm.get("average"),
             "packet_loss_pct": loss, "availability_pct": None, "status": status, "mapping": mapping,
-            "lm_id": lm_id, "lm_name": lm_name, "evidence": {"ping_max_ms": lm.get("max"), "check": "HTTPS reachability" if service.check_port else "LogicMonitor network quality"}}
+            "lm_id": lm_id, "lm_name": lm_name, "evidence": {"ping_max_ms": lm.get("max"), "cpu_pct": lm.get("cpu"), "memory_pct": lm.get("memory"),
+            "host_status": lm.get("host_status"), "check": "HTTPS reachability" if service.check_port else "LogicMonitor network quality"}}
 
 
 async def refresh_applications_once() -> None:
@@ -152,6 +166,8 @@ def applications(db: Session = Depends(session), user=Depends(current_user)):
                        "logicmonitor": service.logicmonitor_display_name, "last_checked": latest_observation.collected_at if latest_observation else None,
                        "status": latest_observation.status if latest_observation else "Baseline pending", "latency_ms": latest_observation.latency_ms if latest_observation else None,
                        "packet_loss_pct": latest_observation.packet_loss_pct if latest_observation else None,
+                       "cpu_pct": latest_observation.evidence.get("cpu_pct") if latest_observation else None,
+                       "memory_pct": latest_observation.evidence.get("memory_pct") if latest_observation else None,
                        "dns_ok": latest_observation.dns_ok if latest_observation else None, "port_ok": latest_observation.port_ok if latest_observation else None,
                        "route_status": latest_observation.route_status if latest_observation else "Route evidence pending"})
     return {"items": output, "total": len(output)}
