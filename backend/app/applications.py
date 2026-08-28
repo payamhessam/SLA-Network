@@ -130,14 +130,21 @@ async def _lm_application(client: LogicMonitorClient, service: ApplicationServic
         return {}, None, None, "Mapping pending" if method in ("Not Found", "Ambiguous") else method
     device_id = int(remote["id"]); applied = await client.applied_datasources(device_id)
     wanted = re.sub(r"[^a-z0-9]", "", service.application.lower())
-    ds = next((x for x in applied if wanted in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower()) and "applicationpool" in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower())), None)
+    ds = next((x for x in applied if "applicationpool" in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower())), None)
     if not ds:
         return {"host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched · application datasource not monitored"
-    instances = await client.instances(device_id, int(ds["id"]))
+    instances = [i for i in await client.instances(device_id, int(ds["id"]))
+                 if wanted in re.sub(r"[^a-z0-9]", "", str(i.get("name") or i.get("displayName") or "").lower())]
     if not instances:
         return {}, device_id, remote.get("displayName"), "Matched · no application instances"
     now = int(time.time()); rows = await asyncio.gather(*(client.instance_data(device_id, int(ds["id"]), int(i["id"]), now - 86400, now) for i in instances))
     latest_rows = [latest(x) for x in rows if latest(x)]
+    ping = next((x for x in applied if (x.get("dataSourceName") or "").lower() == "ping"), None)
+    cpu_ds = next((x for x in applied if "cpu" in (x.get("dataSourceName") or "").lower() and "hyperv" not in (x.get("dataSourceName") or "").lower()), None)
+    mem_ds = next((x for x in applied if "memory" in (x.get("dataSourceName") or "").lower() and "hyperv" not in (x.get("dataSourceName") or "").lower()), None)
+    aux = await asyncio.gather(*(client.instance_data(device_id, int(src["id"]), int((await client.instances(device_id, int(src["id"])))[0]["id"]), now - 3600, now) for src in (ping, cpu_ds, mem_ds) if src))
+    aux_rows = [latest(x) for x in aux if latest(x)]
+    latest_rows.extend(aux_rows)
     def pick(*names):
         for row in latest_rows:
             for key, value in row.items():
@@ -155,9 +162,11 @@ async def _lm_application(client: LogicMonitorClient, service: ApplicationServic
             series = [numeric(sample[index]) for sample in values if index < len(sample) and numeric(sample[index]) is not None]
             if series:
                 request_values.append(max(series) - min(series) if len(series) > 1 else series[-1])
+    pool_state = pick("currentapplicationpoolstate")
     return {"loss": pick("packetloss", "loss"), "average": pick("latency", "responsetime", "averagertt", "average"),
             "cpu": pick("cpubusy", "cpu"), "memory": pick("memory", "mem"), "requests_daily": round(sum(request_values), 1) if request_values else None,
-            "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), f"Matched · {ds.get('dataSourceName') or ds.get('name')}"
+            "pool_state": pool_state, "pool_uptime_seconds": pick("currentapplicationpooluptimeseconds"), "worker_processes": pick("currentworkerprocesses"),
+            "recycles": pick("applicationpoolrecycles"), "failures": pick("totalworkerprocessfailures"), "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), f"Matched · Application Pools- instance {service.application}"
 
 
 async def collect_application(service: ApplicationService) -> dict:
@@ -175,7 +184,9 @@ async def collect_application(service: ApplicationService) -> dict:
             logger.exception("LogicMonitor application collection failed for %s", service.service_key)
             mapping = "LogicMonitor collection failed"
     loss = lm.get("loss")
-    if port_ok is False or dns_ok is False:
+    if service.application != "SAP" and lm.get("pool_state") == 4:
+        status = "Critical"
+    elif port_ok is False or dns_ok is False:
         status = "Critical"
     elif loss is not None and loss >= 20:
         status = "Critical"
@@ -189,6 +200,8 @@ async def collect_application(service: ApplicationService) -> dict:
             "packet_loss_pct": loss, "availability_pct": None, "status": status, "mapping": mapping,
             "lm_id": lm_id, "lm_name": lm_name, "evidence": {"ping_max_ms": lm.get("max"), "cpu_pct": lm.get("cpu"), "memory_pct": lm.get("memory"),
             "host_status": lm.get("host_status"), "logicmonitor_ip": lm.get("logicmonitor_ip"), "requests_daily": lm.get("requests_daily"),
+            "pool_state": lm.get("pool_state"), "pool_uptime_seconds": lm.get("pool_uptime_seconds"), "worker_processes": lm.get("worker_processes"),
+            "recycles": lm.get("recycles"), "failures": lm.get("failures"),
             "check": "LogicMonitor application-pool metrics" if service.application != "SAP" else ("LogicMonitor network quality; no SAP login performed")}}
 
 
@@ -232,6 +245,10 @@ def applications(db: Session = Depends(session), user=Depends(current_user)):
                        "memory_pct": latest_observation.evidence.get("memory_pct") if latest_observation else None,
                        "requests_daily": latest_observation.evidence.get("requests_daily") if latest_observation else None,
                        "logicmonitor_ip": latest_observation.evidence.get("logicmonitor_ip") if latest_observation else None,
+                       "pool_state": latest_observation.evidence.get("pool_state") if latest_observation else None,
+                       "worker_processes": latest_observation.evidence.get("worker_processes") if latest_observation else None,
+                       "recycles": latest_observation.evidence.get("recycles") if latest_observation else None,
+                       "failures": latest_observation.evidence.get("failures") if latest_observation else None,
                        "dns_ok": latest_observation.dns_ok if latest_observation else None, "port_ok": latest_observation.port_ok if latest_observation else None,
                        "route_status": latest_observation.route_status if latest_observation else "Route evidence pending"})
     return {"items": output, "total": len(output)}
