@@ -126,12 +126,12 @@ async def _lm_ping(client: LogicMonitorClient, service: ApplicationService) -> t
 async def _lm_application(client: LogicMonitorClient, service: ApplicationService) -> tuple[dict, int | None, str | None, str]:
     """Read-only evidence for an application-pool datasource shown in LogicMonitor."""
     host_match = re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I)
-    host = host_match.group(1).strip() if host_match else service.endpoint
+    host = host_match.group(1).strip() if host_match else service.endpoint.split("-sm", 1)[0]
     remote, method = await client.find_device(host, None)
     if not remote:
         return {}, None, None, "Mapping pending" if method in ("Not Found", "Ambiguous") else method
     device_id = int(remote["id"]); applied = await client.applied_datasources(device_id)
-    wanted = re.sub(r"[^a-z0-9]", "", service.application.lower())
+    wanted = "servicemanagementapi" if service.service_key.startswith("sm-api") else "servicemanagement"
     ds = next((x for x in applied if "applicationpool" in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower())), None)
     if not ds:
         return {"host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched · application datasource not monitored"
@@ -173,7 +173,8 @@ async def _lm_application(client: LogicMonitorClient, service: ApplicationServic
 
 async def collect_application(service: ApplicationService) -> dict:
     app_host = (re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I).group(1).strip()
-                if service.application != "SAP" and re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I) else service.endpoint)
+                if service.application != "SAP" and re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I)
+                else (service.endpoint.split("-sm", 1)[0] if service.application == "HEAT" else service.endpoint))
     dns_ok = await _dns_probe(app_host) if service.endpoint_kind == "hostname" else None
     port_ok, direct_latency = (await _port_probe(service.endpoint, service.check_port)) if service.check_port and (dns_ok is not False) else (None, None)
     lm, lm_id, lm_name, mapping = {}, None, None, "LogicMonitor not configured"
