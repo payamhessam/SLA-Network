@@ -55,6 +55,10 @@ def _configured_scope() -> list[dict]:
 
 def bootstrap_applications(db: Session) -> None:
     existing = set(db.scalars(select(ApplicationService.service_key)).all())
+    # HEAT's old hostname probe is retired; keep its history but remove it from the live fleet.
+    old_heat = db.scalar(select(ApplicationService).where(ApplicationService.service_key == "heat-service-management"))
+    if old_heat:
+        old_heat.enabled = False
     for row in _configured_scope():
         if row["service_key"] not in existing:
             db.add(ApplicationService(service_key=row["service_key"], service_name=row["service_name"], application=row["application"],
@@ -83,8 +87,11 @@ async def _dns_probe(host: str) -> bool:
 
 async def _lm_ping(client: LogicMonitorClient, service: ApplicationService) -> tuple[dict, int | None, str | None, str]:
     """Use only the standard Ping datasource. Missing/ambiguous mapping is honest evidence."""
+    # Prefer the LogicMonitor host name for SAP so a changed DHCP/static address never breaks mapping.
     hostname = service.endpoint if service.endpoint_kind == "hostname" else service.service_name.split(" · ")[0]
-    remote, method = await client.find_device(hostname, service.endpoint if service.endpoint_kind == "ip" else None)
+    remote, method = await client.find_device(hostname, None)
+    if not remote and service.endpoint_kind == "ip":
+        remote, method = await client.find_device(hostname, service.endpoint)
     if not remote:
         return {}, None, None, "Mapping pending" if method in ("Not Found", "Ambiguous") else method
     device_id = int(remote["id"])
@@ -102,25 +109,59 @@ async def _lm_ping(client: LogicMonitorClient, service: ApplicationService) -> t
         return latest(data)
 
     ping_row, linux_row, snmp_memory_row = await asyncio.gather(latest_for("Ping"), latest_for("Linux_SSH_CPUMemory"), latest_for("NetSNMP_Memory_Usage"))
+    props = await client.properties(device_id)
     if not ping_row:
         return {"cpu": numeric(linux_row.get("CPUBusyPercent")), "memory": numeric(linux_row.get("PercentUsedMemory")),
-                "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched · Ping not monitored"
+                "host_status": remote.get("hostStatus"), "logicmonitor_ip": props.get("system.ips") or props.get("system.ip")}, device_id, remote.get("displayName"), "Matched · Ping not monitored"
     memory = numeric(linux_row.get("PercentUsedMemory"))
     if memory is None:
         used, total = numeric(snmp_memory_row.get("UsedMemory")), numeric(snmp_memory_row.get("TotalReal"))
         memory = round(used * 100 / total, 1) if used is not None and total else None
     return {"loss": numeric(ping_row.get("PingLossPercent")), "average": numeric(ping_row.get("average")), "max": numeric(ping_row.get("maxrtt")),
-            "cpu": numeric(linux_row.get("CPUBusyPercent")), "memory": memory, "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched"
+            "cpu": numeric(linux_row.get("CPUBusyPercent")), "memory": memory, "host_status": remote.get("hostStatus"), "logicmonitor_ip": props.get("system.ips") or props.get("system.ip")}, device_id, remote.get("displayName"), "Matched"
+
+
+async def _lm_application(client: LogicMonitorClient, service: ApplicationService) -> tuple[dict, int | None, str | None, str]:
+    """Read-only evidence for an application-pool datasource shown in LogicMonitor."""
+    host_match = re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I)
+    host = host_match.group(1).strip() if host_match else service.endpoint
+    remote, method = await client.find_device(host, None)
+    if not remote:
+        return {}, None, None, "Mapping pending" if method in ("Not Found", "Ambiguous") else method
+    device_id = int(remote["id"]); applied = await client.applied_datasources(device_id)
+    wanted = re.sub(r"[^a-z0-9]", "", service.application.lower())
+    ds = next((x for x in applied if wanted in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower()) and "applicationpool" in re.sub(r"[^a-z0-9]", "", str(x.get("dataSourceName") or x.get("name") or "").lower())), None)
+    if not ds:
+        return {"host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), "Matched · application datasource not monitored"
+    instances = await client.instances(device_id, int(ds["id"]))
+    if not instances:
+        return {}, device_id, remote.get("displayName"), "Matched · no application instances"
+    now = int(time.time()); rows = await asyncio.gather(*(client.instance_data(device_id, int(ds["id"]), int(i["id"]), now - 86400, now) for i in instances))
+    latest_rows = [latest(x) for x in rows if latest(x)]
+    def pick(*names):
+        for row in latest_rows:
+            for key, value in row.items():
+                if any(n in key.lower() for n in names):
+                    val = numeric(value)
+                    if val is not None: return val
+        return None
+    request_keys = [(k, numeric(v)) for row in latest_rows for k, v in row.items() if numeric(v) is not None and "request" in k.lower()]
+    return {"loss": pick("packetloss", "loss"), "average": pick("latency", "responsetime", "averagertt", "average"),
+            "cpu": pick("cpubusy", "cpu"), "memory": pick("memory", "mem"), "requests_daily": round(sum(v for _, v in request_keys), 1) if request_keys else None,
+            "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), f"Matched · {ds.get('dataSourceName') or ds.get('name')}"
 
 
 async def collect_application(service: ApplicationService) -> dict:
-    dns_ok = await _dns_probe(service.endpoint) if service.endpoint_kind == "hostname" else None
+    app_host = (re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I).group(1).strip()
+                if service.application != "SAP" and re.search(r"\(on\s+([^\)]+)\)", service.service_name, re.I) else service.endpoint)
+    dns_ok = await _dns_probe(app_host) if service.endpoint_kind == "hostname" else None
     port_ok, direct_latency = (await _port_probe(service.endpoint, service.check_port)) if service.check_port and (dns_ok is not False) else (None, None)
     lm, lm_id, lm_name, mapping = {}, None, None, "LogicMonitor not configured"
     settings = get_settings()
     if settings.lm_portal_url and settings.access_id and settings.access_key:
         try:
-            lm, lm_id, lm_name, mapping = await _lm_ping(LogicMonitorClient(), service)
+            collector = _lm_ping if service.application == "SAP" else _lm_application
+            lm, lm_id, lm_name, mapping = await collector(LogicMonitorClient(), service)
         except Exception:
             logger.exception("LogicMonitor application collection failed for %s", service.service_key)
             mapping = "LogicMonitor collection failed"
@@ -131,14 +172,15 @@ async def collect_application(service: ApplicationService) -> dict:
         status = "Critical"
     elif loss is not None and loss >= 2:
         status = "Warning"
-    elif port_ok is True or (loss is not None and loss < 2):
+    elif port_ok is True or (loss is not None and loss < 2) or (service.application != "SAP" and mapping.startswith("Matched")):
         status = "Healthy"
     else:
         status = "Unknown"
     return {"dns_ok": dns_ok, "port_ok": port_ok, "latency_ms": direct_latency if direct_latency is not None else lm.get("average"),
             "packet_loss_pct": loss, "availability_pct": None, "status": status, "mapping": mapping,
             "lm_id": lm_id, "lm_name": lm_name, "evidence": {"ping_max_ms": lm.get("max"), "cpu_pct": lm.get("cpu"), "memory_pct": lm.get("memory"),
-            "host_status": lm.get("host_status"), "check": "HTTPS reachability" if service.check_port else "LogicMonitor network quality"}}
+            "host_status": lm.get("host_status"), "logicmonitor_ip": lm.get("logicmonitor_ip"), "requests_daily": lm.get("requests_daily"),
+            "check": "LogicMonitor application-pool metrics" if service.application != "SAP" else ("LogicMonitor network quality; no SAP login performed")}}
 
 
 async def refresh_applications_once() -> None:
@@ -168,7 +210,7 @@ async def application_refresh_loop() -> None:
 
 @router.get("")
 def applications(db: Session = Depends(session), user=Depends(current_user)):
-    services = db.scalars(select(ApplicationService).order_by(ApplicationService.application, ApplicationService.service_name)).all()
+    services = db.scalars(select(ApplicationService).where(ApplicationService.enabled.is_(True)).order_by(ApplicationService.application, ApplicationService.service_name)).all()
     output = []
     for service in services:
         latest_observation = db.scalars(select(ApplicationObservation).where(ApplicationObservation.application_service_id == service.id).order_by(ApplicationObservation.collected_at.desc()).limit(1)).first()
@@ -179,6 +221,8 @@ def applications(db: Session = Depends(session), user=Depends(current_user)):
                        "packet_loss_pct": latest_observation.packet_loss_pct if latest_observation else None,
                        "cpu_pct": latest_observation.evidence.get("cpu_pct") if latest_observation else None,
                        "memory_pct": latest_observation.evidence.get("memory_pct") if latest_observation else None,
+                       "requests_daily": latest_observation.evidence.get("requests_daily") if latest_observation else None,
+                       "logicmonitor_ip": latest_observation.evidence.get("logicmonitor_ip") if latest_observation else None,
                        "dns_ok": latest_observation.dns_ok if latest_observation else None, "port_ok": latest_observation.port_ok if latest_observation else None,
                        "route_status": latest_observation.route_status if latest_observation else "Route evidence pending"})
     return {"items": output, "total": len(output)}
