@@ -5,3 +5,4 @@
 .fleet-kpis article{overflow:visible;z-index:0}
 .fleet-kpis article:has(.help:hover),.fleet-kpis article:has(.help:focus-within){z-index:2}
 @media(max-width:430px){.fleet-kpis{grid-template-columns:1fr 1fr}.fleet-kpis article{min-height:96px;padding:13px}.fleet-kpis strong{font-size:21px}.fleet-kpis strong.pending{font-size:11px}.device-card-grid{grid-template-columns:1fr}.fleet-filters{grid-template-columns:1fr}.fleet-filters button{grid-column:auto}.device-card-top{align-items:flex-start}.fleet-state{white-space:nowrap}}
+.application-detail{margin-top:18px}.application-spark{margin-top:20px;padding:14px;background:var(--app-input);border:1px solid var(--app-border);border-radius:8px}.spark-bars{height:120px;display:flex;align-items:flex-end;gap:3px;margin:12px 0}.spark-bars span{flex:1;min-width:3px;background:var(--app-blue);border-radius:2px 2px 0 0;opacity:.85}

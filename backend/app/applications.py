@@ -11,6 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy import func
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from .auth import administrator, current_user
@@ -267,3 +269,28 @@ def remove_application(service_id: int, db: Session = Depends(session), user=Dep
     service = db.get(ApplicationService, service_id)
     if not service: raise HTTPException(404, "Application not found.")
     db.delete(service); db.commit()
+
+@router.get("/{service_id}/detail")
+def application_detail(service_id: int, db: Session = Depends(session), user=Depends(current_user)):
+    service = db.get(ApplicationService, service_id)
+    if not service: raise HTTPException(404, "Application not found.")
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    rows = db.scalars(select(ApplicationObservation).where(ApplicationObservation.application_service_id == service_id,
+        ApplicationObservation.collected_at >= since).order_by(ApplicationObservation.collected_at)).all()
+    by_day = {}
+    for row in rows:
+        day = row.collected_at.date().isoformat(); bucket = by_day.setdefault(day, {"total": 0, "healthy": 0, "critical": 0})
+        bucket["total"] += 1
+        bucket["healthy"] += row.status == "Healthy"
+        bucket["critical"] += row.status == "Critical"
+    series = [{"day": day, "samples": v["total"], "availability": round(100*v["healthy"]/v["total"], 3) if v["total"] else None} for day, v in sorted(by_day.items())]
+    valid = sum(v["healthy"] for v in by_day.values()); observed = sum(v["total"] for v in by_day.values())
+    expected = max(1, round(30 * 24 * 60 / max(1, get_settings().application_collection_interval_minutes)))
+    coverage = min(100.0, 100.0 * observed / expected)
+    observed_sla = round(100.0 * valid / observed, 3) if observed else None
+    official = observed_sla if coverage >= get_settings().coverage_threshold else None
+    return {"id": service.id, "name": service.service_name, "application": service.application, "environment": service.environment,
+            "endpoint": service.endpoint, "logicmonitor": service.logicmonitor_display_name, "mapping": service.mapping_status,
+            "sla": {"official": official, "observed": observed_sla, "coverage": round(coverage, 2), "target": get_settings().sla_target,
+                    "label": "Official SLA" if official is not None else ("Observed only" if observed_sla is not None else "Insufficient evidence")},
+            "series": series, "observations": rows[-1].evidence if rows else {}, "sample_count": observed}
