@@ -394,14 +394,17 @@ function NamingSettings(){
 }
 function AppearanceSettings(){const current=localStorage.getItem('themePreference')||'system';const setMode=(mode:string)=>{localStorage.setItem('themePreference',mode);const dark=mode==='dark'||(mode==='system'&&matchMedia('(prefers-color-scheme:dark)').matches);localStorage.setItem('theme',dark?'dark':'light');document.documentElement.dataset.theme=dark?'dark':'light';location.reload()};return <section className="panel"><h2>Appearance</h2><p className="muted">Choose a theme or follow the operating-system preference.</p><div className="theme-options">{['light','dark','system'].map(x=><button className={current===x?'active':''} onClick={()=>setMode(x)}>{x[0].toUpperCase()+x.slice(1)}</button>)}</div></section>}
 function SlaPage({role}:{role:string}){
-  const[data,setData]=useState<any>(null);const[msg,setMsg]=useState('');const[busy,setBusy]=useState(false);const[tr,setTr]=useState<any>(null);
+  const[data,setData]=useState<any>(null);const[msg,setMsg]=useState('');const[busy,setBusy]=useState(false);const[backfillStatus,setBackfillStatus]=useState<any>(null);const[tr,setTr]=useState<any>(null);
   const devPg=usePager<any>(data?.devices||[]);
   const load=()=>api('/sla/summary').then(setData).catch(x=>setMsg(x.message));
   useEffect(()=>{load();api('/trends').then(setTr).catch(()=>{})},[]);
   if(!data)return <section className="panel">Loading SLA…</section>;
   const r=data.resilience||{};
   const fmt=(w:any)=>w&&w.availability!=null?fmtPct(w.availability):(w?.status||'—');
-  const backfill=async()=>{setBusy(true);setMsg('Starting backfill…');try{await api('/sla/backfill',{method:'POST'});const poll=async()=>{try{const st=await api('/sla/backfill/status');if(st.running){setMsg('Backfilling availability history from LogicMonitor… this runs in the background and can take a few minutes.');setTimeout(poll,8000)}else{if(st.error){setMsg('Backfill failed: '+st.error+'. Check server logs.')}else if(st.result){setMsg(`Backfill complete for ${st.result.devices} device(s) (${st.result.start} → ${st.result.end}).`);load()}else{setMsg('Backfill finished.');load()}setBusy(false)}}catch(x:any){setMsg('Lost status connection: '+x.message);setBusy(false)}};setTimeout(poll,2000)}catch(x:any){setMsg(x.message);setBusy(false)}};
+  const backfill=async()=>{setBusy(true);setBackfillStatus(null);setMsg('Starting backfill…');try{await api('/sla/backfill',{method:'POST'});const poll=async()=>{try{const st=await api('/sla/backfill/status');setBackfillStatus(st);if(st.running){setMsg('Backfill is running. Progress is shown below.');setTimeout(poll,3000)}else{if(st.error){setMsg('Backfill failed: '+st.error+'.')}else if(st.result){setMsg(`Backfill complete for ${st.result.devices} device(s) (${st.result.start} → ${st.result.end}).`);load()}else{setMsg('Backfill finished.');load()}setBusy(false)}}catch(x:any){setMsg('Lost status connection: '+x.message);setBusy(false)}};poll()}catch(x:any){setMsg(x.message);setBusy(false)}};
+  const progress=backfillStatus?.total_devices?Math.min(100,Math.round(100*backfillStatus.completed_devices/backfillStatus.total_devices)):0;
+  const elapsed=backfillStatus?.started_at?Math.max(0,Math.round((Date.now()-new Date(backfillStatus.started_at).getTime())/60000)):0;
+  const remaining=backfillStatus?.completed_devices>0&&backfillStatus?.total_devices?Math.max(0,Math.ceil(elapsed*(backfillStatus.total_devices-backfillStatus.completed_devices)/backfillStatus.completed_devices)):null;
   return <>
     <section className="cards">
       <article><span>Fleet YTD availability<Help text="Fleet-wide year-to-date availability = up eligible minutes / observed eligible minutes across every mapped switch, coverage-gated at 90%. 'Insufficient' means not enough evidence yet — it is never shown as 0%."/></span><strong>{fmt(data.fleet_ytd)}</strong><small>Target {data.target}% · coverage {fmtPct(data.fleet_ytd.coverage)}</small></article>
@@ -416,6 +419,7 @@ function SlaPage({role}:{role:string}){
     <section className="panel">
       <div className="panelhead"><div><h2>Network resilience estimate<Help text="Why the fleet lands at its tier: a stack or dual healthy power supplies are direct N+1 component evidence. Neighbor names do not prove independent failure domains, so Tier III/IV are withheld until independently verified. Reassessed every 12 hours."/></h2><p className="muted">Recomputed every 12 hours{r.as_of?` · last run ${new Date(r.as_of).toLocaleString()}`:' · not run yet'}</p></div>{role==='Administrator'&&<button disabled={busy} onClick={backfill}>{busy?'Working…':'Run backfill + reassess'}</button>}</div>
       {msg&&<div className="form-message">{msg}</div>}
+      {busy&&backfillStatus&&<div className="backfill-progress" aria-live="polite"><div className="progress-row"><b>{progress}%</b><span>{backfillStatus.completed_devices||0} of {backfillStatus.total_devices||0} devices processed</span><span>Phase: {backfillStatus.phase||'starting'}</span></div><div className="progress-track"><div className="progress-fill" style={{width:`${progress}%`}}/></div><div className="muted">{backfillStatus.records_written||0} records written · {elapsed} min elapsed{remaining!=null?` · about ${remaining} min remaining`:''}</div></div>}
       <ul className="resilience-rationale">{(r.rationale||['Assessment pending.']).map((x:string,i:number)=><li key={i}>{x}</li>)}</ul>
     </section>
     <section className="panel">

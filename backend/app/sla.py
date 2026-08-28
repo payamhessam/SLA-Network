@@ -219,7 +219,7 @@ def monitored_devices(db: Session):
     return db.scalars(select(Device).where(Device.lm_device_id.is_not(None), Device.active.is_(True)).order_by(Device.hostname)).all()
 
 
-async def backfill_all(start: date | None = None, end: date | None = None, force: bool = False) -> dict:
+async def backfill_all(start: date | None = None, end: date | None = None, force: bool = False, progress: dict | None = None) -> dict:
     """One-time (or admin-triggered) backfill for every mapped switch."""
     async with _backfill_lock:
         start = start or backfill_start()
@@ -231,13 +231,24 @@ async def backfill_all(start: date | None = None, end: date | None = None, force
             devices = monitored_devices(db)
             [(d.id, d.lm_device_id, d.hostname, d.device_type) for d in devices]  # force-load before the session closes
 
+        if progress is not None:
+            progress.update(total_devices=len(devices), completed_devices=0, records_written=0,
+                            phase="recent" if recent_start > start else "history")
+
         async def run(device, window_start):
             async with device_sem:  # bound concurrent DB sessions so the pool is not exhausted
-                return await backfill_device(device, window_start, end, force, sem)
+                outcome = await backfill_device(device, window_start, end, force, sem)
+                if progress is not None:
+                    progress["completed_devices"] = progress.get("completed_devices", 0) + 1
+                    progress["records_written"] = progress.get("records_written", 0) + int(outcome.get("written", 0))
+                return outcome
 
         # Pass 1: recent weeks for every device, so WTD/MTD light up fleet-wide within a minute or two.
         if recent_start > start:
             await asyncio.gather(*(run(d, recent_start) for d in devices), return_exceptions=True)
+            if progress is not None:
+                progress["completed_devices"] = 0
+                progress["phase"] = "history"
         # Pass 2: full history back to the start (fills YTD); recent good days are skipped when force is False.
         outcomes = await asyncio.gather(*(run(d, start) for d in devices), return_exceptions=True)
         results = []

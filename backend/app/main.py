@@ -38,7 +38,7 @@ from . import overview, pathres, reports, resilience, sla, ssh_collect, telemetr
 settings = get_settings(); limiter = Limiter(key_func=get_remote_address)
 # Disable the interactive docs and OpenAPI schema in production (no API surface disclosure).
 _docs_url = None if settings.is_production else "/docs"
-app = FastAPI(title="Enterprise Network Health and SLA", version="1.2.4",
+app = FastAPI(title="Enterprise Network Health and SLA", version="1.2.6",
               docs_url=_docs_url, redoc_url=None, openapi_url=(None if settings.is_production else "/openapi.json"))
 app.state.limiter = limiter
 app.add_middleware(CORSMiddleware, allow_origins=[x.strip() for x in settings.allowed_origins.split(",")], allow_credentials=False, allow_methods=["GET", "POST", "PUT", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
@@ -121,7 +121,7 @@ def me(user=Depends(current_user)):
 @app.get("/api/v1/health")
 def health(db: Session = Depends(session)):
     db.execute(select(func.count(Device.id))).scalar()
-    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.2.4"}
+    return {"status":"ok", "database":"connected", "logicmonitor":"configured" if settings.lm_portal_url else "not configured", "version":"1.2.6"}
 
 
 @app.get("/api/v1/path-resilience")
@@ -598,14 +598,17 @@ def sla_resilience(user=Depends(current_user), db:Session=Depends(session)):
 
 # Manual backfill runs in the background (it can take minutes across the fleet) so the HTTP
 # request returns immediately and the UI polls for status instead of timing out at the proxy.
-_backfill_state = {"running": False, "result": None, "error": None, "started_at": None, "finished_at": None}
+_backfill_state = {"running": False, "result": None, "error": None, "started_at": None, "finished_at": None,
+                   "phase": None, "total_devices": 0, "completed_devices": 0,
+                   "records_written": 0}
 
 
 async def _run_backfill_job(actor: str):
     _backfill_state.update(running=True, result=None, error=None,
-                           started_at=datetime.now(timezone.utc).isoformat(), finished_at=None)
+                           started_at=datetime.now(timezone.utc).isoformat(), finished_at=None,
+                           phase="starting", total_devices=0, completed_devices=0, records_written=0)
     try:
-        result = await sla.backfill_all(force=False)
+        result = await sla.backfill_all(force=False, progress=_backfill_state)
         await resilience.run_assessment()
         with SessionLocal() as db:
             audit(db, actor, "sla.backfill", "LogicMonitor", {"devices": result["devices"]}); db.commit()
@@ -615,6 +618,8 @@ async def _run_backfill_job(actor: str):
         logging.getLogger("backfill").exception("Manual backfill failed")
     finally:
         _backfill_state["running"] = False
+        if _backfill_state.get("phase") not in ("error", "complete"):
+            _backfill_state["phase"] = "complete" if not _backfill_state.get("error") else "error"
         _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
 
 
