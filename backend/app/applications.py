@@ -145,9 +145,18 @@ async def _lm_application(client: LogicMonitorClient, service: ApplicationServic
                     val = numeric(value)
                     if val is not None: return val
         return None
-    request_keys = [(k, numeric(v)) for row in latest_rows for k, v in row.items() if numeric(v) is not None and "request" in k.lower()]
+    request_values = []
+    for raw in rows:
+        points, values = raw.get("dataPoints", []) or [], raw.get("values", []) or []
+        for index, key in enumerate(points):
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if not any(token in normalized for token in ("totalrequests", "requestcount", "requestsreceived", "requestscompleted")):
+                continue
+            series = [numeric(sample[index]) for sample in values if index < len(sample) and numeric(sample[index]) is not None]
+            if series:
+                request_values.append(max(series) - min(series) if len(series) > 1 else series[-1])
     return {"loss": pick("packetloss", "loss"), "average": pick("latency", "responsetime", "averagertt", "average"),
-            "cpu": pick("cpubusy", "cpu"), "memory": pick("memory", "mem"), "requests_daily": round(sum(v for _, v in request_keys), 1) if request_keys else None,
+            "cpu": pick("cpubusy", "cpu"), "memory": pick("memory", "mem"), "requests_daily": round(sum(request_values), 1) if request_values else None,
             "host_status": remote.get("hostStatus")}, device_id, remote.get("displayName"), f"Matched · {ds.get('dataSourceName') or ds.get('name')}"
 
 
